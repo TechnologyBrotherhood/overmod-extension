@@ -15,8 +15,6 @@ function inputEl(id) { return /** @type {HTMLInputElement} */ (document.getEleme
 /** @returns {HTMLSelectElement} */
 function selectEl(id) { return /** @type {HTMLSelectElement} */ (document.getElementById(id)); }
 
-const DEFAULT_HIGHLIGHT_STYLE = { bg: '#fff8d1', fg: '#2d2d2d' };
-
 async function blockUser(username, publicKey) {
   const resp = await chrome.runtime.sendMessage({ type: 'overmod:addBlock', username, publicKey });
   if (!resp || !resp.ok) {

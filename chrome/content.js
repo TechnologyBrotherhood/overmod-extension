@@ -6,8 +6,6 @@
   const HN_HOST = location.hostname;
   if (!/(^|\.)news\.ycombinator\.com$/.test(HN_HOST)) return;
 
-  const DEFAULT_HIGHLIGHT_STYLE = { bg: '#fff8d1', fg: '#2d2d2d' };
-
   // Basic diagnostics to help verify the script is active
   try { console.log('Overmod Active'); } catch (_) {}
 

@@ -1,5 +1,8 @@
 // Shared helpers for Overmod extension
 
+// Default highlight colors used across the extension
+const DEFAULT_HIGHLIGHT_STYLE = { bg: '#fff8d1', fg: '#2d2d2d' };
+
 function normalizeHexColor(value) {
   if (!value) return '';
   const s = String(value).trim();
