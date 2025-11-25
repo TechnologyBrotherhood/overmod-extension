@@ -6,6 +6,8 @@
   const HN_HOST = location.hostname;
   if (!/(^|\.)news\.ycombinator\.com$/.test(HN_HOST)) return;
 
+  const DEFAULT_HIGHLIGHT_STYLE = { bg: '#fff8d1', fg: '#2d2d2d' };
+
   // Basic diagnostics to help verify the script is active
   try { console.log('Overmod Active'); } catch (_) {}
 
@@ -13,7 +15,8 @@
   function injectStyle() {
     const STYLE = `
     .overmod-hidden { display: none !important; }
-    .overmod-highlight > td { background: #fff8d1 !important; }
+    .overmod-highlight > td { background: var(--overmod-highlight-bg, ${DEFAULT_HIGHLIGHT_STYLE.bg}) !important; color: var(--overmod-highlight-fg, ${DEFAULT_HIGHLIGHT_STYLE.fg}) !important; }
+    .overmod-highlight a, .overmod-highlight a:visited, .overmod-highlight .hnuser { color: var(--overmod-highlight-fg, ${DEFAULT_HIGHLIGHT_STYLE.fg}) !important; }
     .overmod-inline-action { color: #828282; margin-left: 6px; font-size: 12px; }
     .overmod-inline-action a { color: #828282; text-decoration: none; }
     .overmod-inline-action a:hover { text-decoration: underline; }
@@ -197,6 +200,47 @@
     }
   }
 
+  function setHighlight(row, style) {
+    if (!row) return;
+    row.classList.add('overmod-highlight');
+    const normalized = normalizeHighlightStyle(style);
+    const bg = normalized.bg || DEFAULT_HIGHLIGHT_STYLE.bg;
+    const fg = normalized.fg || DEFAULT_HIGHLIGHT_STYLE.fg;
+    row.style.setProperty('--overmod-highlight-bg', bg);
+    row.style.setProperty('--overmod-highlight-fg', fg);
+  }
+
+  function clearHighlight(row) {
+    if (!row) return;
+    row.classList.remove('overmod-highlight');
+    row.style.removeProperty('--overmod-highlight-bg');
+    row.style.removeProperty('--overmod-highlight-fg');
+  }
+
+  function buildHighlightStyleMap(state) {
+    const map = new Map();
+    if (!state) return map;
+    const sources = (state.highlighted && state.highlighted.sourceLists) || {};
+    const colors = state.highlightColors || {};
+    const ordered = Array.isArray(state.subscribedLists) ? state.subscribedLists.slice() : [];
+    const seen = new Set();
+    const applyList = (pk) => {
+      if (!pk || seen.has(pk)) return;
+      seen.add(pk);
+      const users = sources[pk] || [];
+      const style = normalizeHighlightStyle(colors[pk]);
+      if ((!style.bg && !style.fg) || !Array.isArray(users) || !users.length) return;
+      for (const name of users) {
+        const key = String(name || '').toLowerCase();
+        if (!key || map.has(key)) continue;
+        map.set(key, style);
+      }
+    };
+    ordered.forEach(applyList);
+    Object.keys(sources || {}).forEach(applyList);
+    return map;
+  }
+
   function applyBlocking(index, blockedSet) {
     clearEffects(index);
     if (!blockedSet || blockedSet.size === 0) return;
@@ -212,9 +256,9 @@
     }
   }
 
-  function applyBothHighlights(index, highlightedIds, highlightedUsers) {
+  function applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleMap) {
     // Clear previous
-    for (const item of index) item.row.classList.remove('overmod-highlight');
+    for (const item of index) clearHighlight(item.row);
 
     const idToIdx = new Map();
     index.forEach((it, i) => idToIdx.set(it.id, i));
@@ -229,7 +273,7 @@
         for (let i = startIdx; i < index.length; i++) {
           const curr = index[i];
           if (i === startIdx || curr.indent > baseIndent) {
-            curr.row.classList.add('overmod-highlight');
+            setHighlight(curr.row, DEFAULT_HIGHLIGHT_STYLE);
           } else {
             break;
           }
@@ -243,7 +287,8 @@
       for (let i = 0; i < index.length; i++) {
         const it = index[i];
         if (it.author && highlightedUsers.has(it.author.toLowerCase())) {
-          it.row.classList.add('overmod-highlight');
+          const style = userStyleMap && userStyleMap.get(it.author.toLowerCase());
+          setHighlight(it.row, style || DEFAULT_HIGHLIGHT_STYLE);
         }
       }
     }
@@ -494,6 +539,7 @@
       const local = await getLocalState();
       state = { ...local.overmod };
     }
+    let userStyleMap = buildHighlightStyleMap(state);
     const blockedSet = new Set((state?.blocked?.combined || []).map((s) => String(s).toLowerCase()));
 
     // Load highlights
@@ -509,7 +555,7 @@
       applyBlocking(index, blockedSet);
       reorderBlockedRoots(index);
     }
-    applyBothHighlights(index, highlightedIds, highlightedUsers);
+    applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleMap);
     // No injected per-comment actions
 
     // React to storage updates (e.g., sync completes or user changes settings)
@@ -518,6 +564,10 @@
       let needReblock = false, needRehighlight = false;
       if (changes.overmod) needReblock = true;
       if (changes.overmodHighlighted) needRehighlight = true;
+      if (changes.overmod) {
+        state = changes.overmod.newValue || state;
+        userStyleMap = buildHighlightStyleMap(state || {});
+      }
       if (needReblock || changes.overmod) {
         const st = changes.overmod ? changes.overmod.newValue : null;
         const nextBlocked = new Set(((st?.blocked?.combined) || (state?.blocked?.combined) || []).map((s) => String(s).toLowerCase()));
@@ -530,13 +580,13 @@
         /** @type {Record<string, boolean>} */
         const map = changes.overmodHighlighted ? changes.overmodHighlighted.newValue : (await getLocalState()).highlighted;
         const ids = new Set(Object.keys(map || {}).filter((k) => map[k] === true));
-        applyBothHighlights(index, ids, hlUsers);
+        applyBothHighlights(index, ids, hlUsers, userStyleMap);
       } else if (needRehighlight) {
         /** @type {Record<string, boolean>} */
         const map = changes.overmodHighlighted.newValue || {};
         const ids = new Set(Object.keys(map).filter((k) => map[k] === true));
         const hlUsers = new Set((state?.highlightedUsers || []).map(s => String(s).toLowerCase()));
-        applyBothHighlights(index, ids, hlUsers);
+        applyBothHighlights(index, ids, hlUsers, userStyleMap);
       }
     });
   }

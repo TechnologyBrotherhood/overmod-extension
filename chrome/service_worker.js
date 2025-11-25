@@ -5,6 +5,7 @@ const DEFAULT_SETTINGS = {
   subscribedLists: [], // array of publicKey strings
   subscribedOverrides: {}, // publicKey -> 'block' | 'highlight'
   subscribedLabels: {}, // publicKey -> label
+  highlightColors: {}, // publicKey -> custom highlight color (hex/rgb) for highlight lists
   localBlockedUsers: [], // local-only blocked usernames
   highlightedUsers: [], // local-only highlighted usernames
   hideMode: "remove", // or "collapse" in future
@@ -70,6 +71,7 @@ const DEFAULT_SYNC = {
   subscribedLists: [],
   subscribedOverrides: {},
   subscribedLabels: {},
+  highlightColors: {},
   localBlockedUsers: [],
   highlightedUsers: []
 };
@@ -77,7 +79,13 @@ const DEFAULT_SYNC = {
 async function getSyncSettings() {
   const { overmodSync } = await chrome.storage.sync.get('overmodSync');
   const raw = overmodSync && typeof overmodSync === 'object' ? overmodSync : {};
-  return { ...DEFAULT_SYNC, ...raw };
+  return {
+    ...DEFAULT_SYNC,
+    ...raw,
+    highlightColors: raw.highlightColors && typeof raw.highlightColors === 'object'
+      ? raw.highlightColors
+      : {}
+  };
 }
 
 async function setSyncSettings(next) {
@@ -107,6 +115,10 @@ async function getFullState() {
     subscribedLabels: {
       ...(local.subscribedLabels || {}),
       ...(sync.subscribedLabels || {})
+    },
+    highlightColors: {
+      ...(local.highlightColors || {}),
+      ...(sync.highlightColors || {})
     },
     localBlockedUsers: mergedLocalBlocked,
     highlightedUsers: mergedHighlightedUsers,
@@ -139,6 +151,12 @@ async function ensureDefaults() {
     merged.subscribedLabels = {
       ...(merged.subscribedLabels || {}),
       ...sync.subscribedLabels
+    };
+  }
+  if (sync.highlightColors && typeof sync.highlightColors === 'object') {
+    merged.highlightColors = {
+      ...(merged.highlightColors || {}),
+      ...sync.highlightColors
     };
   }
 
@@ -442,17 +460,24 @@ async function subscribeList(publicKey, listType, name) {
     labels[pk] = String(name).trim();
   }
 
+  const highlightColors = {
+    ...(state.highlightColors || {}),
+    ...(sync.highlightColors || {})
+  };
+
   const next = {
     ...state,
     subscribedLists: lists,
     subscribedOverrides: overrides,
-    subscribedLabels: labels
+    subscribedLabels: labels,
+    highlightColors
   };
   const nextSync = {
     ...sync,
     subscribedLists: lists.slice(),
     subscribedOverrides: { ...(sync.subscribedOverrides || {}), ...overrides },
-    subscribedLabels: { ...(sync.subscribedLabels || {}), ...labels }
+    subscribedLabels: { ...(sync.subscribedLabels || {}), ...labels },
+    highlightColors
   };
   await Promise.all([setState(next), setSyncSettings(nextSync)]);
   try { await syncBlocklists(); } catch (_) {}
@@ -472,18 +497,26 @@ async function unsubscribeList(publicKey) {
   delete overrides[pk];
   const labels = { ...(state.subscribedLabels || {}) };
   delete labels[pk];
+  const colors = { ...(state.highlightColors || {}) };
+  delete colors[pk];
 
   const next = {
     ...state,
     subscribedLists: filtered,
     subscribedOverrides: overrides,
-    subscribedLabels: labels
+    subscribedLabels: labels,
+    highlightColors: colors
   };
   const nextSync = {
     ...sync,
     subscribedLists: filtered.slice(),
     subscribedOverrides: { ...(sync.subscribedOverrides || {}) , ...overrides },
-    subscribedLabels: { ...(sync.subscribedLabels || {}), ...labels }
+    subscribedLabels: { ...(sync.subscribedLabels || {}), ...labels },
+    highlightColors: (() => {
+      const merged = { ...(sync.highlightColors || {}) , ...colors };
+      delete merged[pk];
+      return merged;
+    })()
   };
   await Promise.all([setState(next), setSyncSettings(nextSync)]);
   try { await syncBlocklists(); } catch (_) {}
