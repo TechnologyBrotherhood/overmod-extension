@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Overmod for Hacker News",
   "description": "Hide threads from blocked users and highlight valuable users on Hacker News.",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "permissions": [
     "storage"
   ],
@@ -17,7 +17,7 @@
       "matches": [
         "https://news.ycombinator.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["common.js", "content.js"],
       "run_at": "document_idle"
     },
     {

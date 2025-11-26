@@ -15,6 +15,14 @@ function inputEl(id) { return /** @type {HTMLInputElement} */ (document.getEleme
 /** @returns {HTMLSelectElement} */
 function selectEl(id) { return /** @type {HTMLSelectElement} */ (document.getElementById(id)); }
 
+const HIGHLIGHT_PALETTE = [
+  { key: 'mint', label: 'Mint', bg: '#d9f99d', fg: '#14532d' },
+  { key: 'sky', label: 'Sky', bg: '#dbeafe', fg: '#1d4ed8' },
+  { key: 'lilac', label: 'Lilac', bg: '#ede9fe', fg: '#4c1d95' },
+  { key: 'coral', label: 'Coral', bg: '#ffe4e6', fg: '#9f1239' },
+  { key: 'default', label: 'Default', bg: DEFAULT_HIGHLIGHT_STYLE.bg, fg: DEFAULT_HIGHLIGHT_STYLE.fg }
+];
+
 async function blockUser(username, publicKey) {
   const resp = await chrome.runtime.sendMessage({ type: 'overmod:addBlock', username, publicKey });
   if (!resp || !resp.ok) {
@@ -38,7 +46,10 @@ async function getSyncSettings() {
     writableLists: Array.isArray(raw.writableLists) ? raw.writableLists : [],
     subscribedLists: Array.isArray(raw.subscribedLists) ? raw.subscribedLists : [],
     subscribedOverrides: raw.subscribedOverrides && typeof raw.subscribedOverrides === 'object' ? raw.subscribedOverrides : {},
-    subscribedLabels: raw.subscribedLabels && typeof raw.subscribedLabels === 'object' ? raw.subscribedLabels : {}
+    subscribedLabels: raw.subscribedLabels && typeof raw.subscribedLabels === 'object' ? raw.subscribedLabels : {},
+    highlightColors: raw.highlightColors && typeof raw.highlightColors === 'object' ? raw.highlightColors : {},
+    localBlockedUsers: Array.isArray(raw.localBlockedUsers) ? raw.localBlockedUsers : [],
+    highlightedUsers: Array.isArray(raw.highlightedUsers) ? raw.highlightedUsers : []
   };
 }
 
@@ -54,12 +65,29 @@ async function mirrorSubscriptionsToSync() {
     subscribedLists: Array.isArray(st.subscribedLists) ? st.subscribedLists.slice() : [],
     subscribedOverrides: { ...(sync.subscribedOverrides || {}), ...(st.subscribedOverrides || {}) },
     subscribedLabels: { ...(sync.subscribedLabels || {}), ...(st.subscribedLabels || {}) },
+    highlightColors: { ...(sync.highlightColors || {}), ...(st.highlightColors || {}) },
     localBlockedUsers: Array.isArray(st.localBlockedUsers) ? st.localBlockedUsers.slice() : [],
     highlightedUsers: Array.isArray(st.highlightedUsers) ? st.highlightedUsers.slice() : []
   };
   await setSyncSettings(next);
 }
 
+
+function getHighlightStyleForPk(publicKey, source) {
+  const raw = source && typeof source === 'object'
+    ? (source[publicKey] || source)
+    : null;
+  const parsed = normalizeHighlightStyle(raw);
+  return {
+    bg: parsed.bg || DEFAULT_HIGHLIGHT_STYLE.bg,
+    fg: parsed.fg || DEFAULT_HIGHLIGHT_STYLE.fg
+  };
+}
+
+function isDefaultHighlightStyle(style) {
+  const s = normalizeHighlightStyle(style);
+  return (s.bg === '' || s.bg === DEFAULT_HIGHLIGHT_STYLE.bg) && (s.fg === '' || s.fg === DEFAULT_HIGHLIGHT_STYLE.fg);
+}
 function renderList(container, items, onRemove) {
   container.innerHTML = '';
   for (const item of items) {
@@ -75,6 +103,150 @@ function renderList(container, items, onRemove) {
     li.appendChild(span);
     container.appendChild(li);
   }
+}
+
+function createHighlightStyleControl(publicKey, initialStyle, onChange, options = { mode: 'compact' }) {
+  const mode = (options && options.mode) || 'compact';
+  const palette = (options && Array.isArray(options.palette) && options.palette.length)
+    ? options.palette
+    : HIGHLIGHT_PALETTE;
+
+  const wrap = document.createElement('div');
+  wrap.className = `color-control ${mode === 'full' ? 'color-control-full' : 'color-control-compact'}`;
+  const style = getHighlightStyleForPk(publicKey, initialStyle);
+
+  let current = { ...style };
+  let currentKey = palette.find(p => p.bg && p.fg && p.bg.toLowerCase() === current.bg.toLowerCase() && p.fg.toLowerCase() === current.fg.toLowerCase())?.key || 'default';
+  const swatches = [];
+
+  function emit() { if (onChange) void onChange({ ...current }); }
+
+  function updateSwatchState() {
+    for (const sw of swatches) {
+      if (sw.dataset.key === currentKey) sw.classList.add('active');
+      else sw.classList.remove('active');
+    }
+  }
+
+  function setStyle(next) {
+    current = {
+      bg: normalizeHexColor(next.bg) || DEFAULT_HIGHLIGHT_STYLE.bg,
+      fg: normalizeHexColor(next.fg) || DEFAULT_HIGHLIGHT_STYLE.fg
+    };
+    if (next.key) currentKey = next.key;
+    bgColor.value = current.bg;
+    fgColor.value = current.fg;
+    bgHex.value = current.bg;
+    fgHex.value = current.fg;
+    updateSwatchState();
+    emit();
+  }
+
+  const label = document.createElement('span');
+  label.className = 'muted small';
+  label.textContent = 'Colour';
+
+  const bgColor = document.createElement('input');
+  bgColor.type = 'color';
+  bgColor.setAttribute('aria-label', 'Background colour');
+  bgColor.value = current.bg;
+
+  const fgColor = document.createElement('input');
+  fgColor.type = 'color';
+  fgColor.setAttribute('aria-label', 'Foreground colour');
+  fgColor.value = current.fg;
+
+  const bgHex = document.createElement('input');
+  bgHex.type = 'text';
+  bgHex.placeholder = '#rrggbb';
+  bgHex.value = current.bg;
+
+  const fgHex = document.createElement('input');
+  fgHex.type = 'text';
+  fgHex.placeholder = '#rrggbb';
+  fgHex.value = current.fg;
+
+  const fieldWrap = document.createElement('div');
+  fieldWrap.className = 'color-fields';
+
+  function syncFromInputs() {
+    const next = {
+      bg: normalizeHexColor(bgHex.value) || normalizeHexColor(bgColor.value) || DEFAULT_HIGHLIGHT_STYLE.bg,
+      fg: normalizeHexColor(fgHex.value) || normalizeHexColor(fgColor.value) || DEFAULT_HIGHLIGHT_STYLE.fg
+    };
+    current = next;
+    bgColor.value = next.bg;
+    fgColor.value = next.fg;
+    bgHex.value = next.bg;
+    fgHex.value = next.fg;
+    currentKey = 'default';
+    updateSwatchState();
+    emit();
+  }
+
+  [bgColor, fgColor, bgHex, fgHex].forEach((input) => {
+    input.addEventListener('change', syncFromInputs);
+    input.addEventListener('blur', syncFromInputs);
+  });
+
+
+  if (mode === 'full') {
+    const paletteWrap = document.createElement('div');
+    paletteWrap.className = 'color-palette';
+    palette.forEach((p) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'swatch';
+      btn.title = `${p.label} (${p.bg})`;
+      btn.style.background = p.bg;
+      btn.style.color = p.fg;
+      btn.textContent = p.label;
+      btn.addEventListener('click', () => {
+        currentKey = p.key || 'preset';
+        setStyle({ bg: p.bg, fg: p.fg, key: p.key || p.label });
+      });
+      btn.dataset.key = p.key || p.label || '';
+      swatches.push(btn);
+      paletteWrap.appendChild(btn);
+    });
+    updateSwatchState();
+
+    const bgGroup = document.createElement('div');
+    bgGroup.className = 'color-field';
+    const bgLabel = document.createElement('label'); bgLabel.textContent = 'Background';
+    bgGroup.appendChild(bgLabel);
+    bgGroup.appendChild(bgColor);
+    bgGroup.appendChild(bgHex);
+
+    const fgGroup = document.createElement('div');
+    fgGroup.className = 'color-field';
+    const fgLabel = document.createElement('label'); fgLabel.textContent = 'Foreground';
+    fgGroup.appendChild(fgLabel);
+    fgGroup.appendChild(fgColor);
+    fgGroup.appendChild(fgHex);
+
+    fieldWrap.appendChild(bgGroup);
+    fieldWrap.appendChild(fgGroup);
+
+    wrap.appendChild(label);
+    wrap.appendChild(paletteWrap);
+    wrap.appendChild(fieldWrap);
+  } else {
+    bgHex.style.display = 'none';
+    fgHex.style.display = 'none';
+    const miniWrap = document.createElement('div');
+    miniWrap.className = 'color-mini';
+    miniWrap.appendChild(bgColor);
+    miniWrap.appendChild(fgColor);
+    wrap.appendChild(label);
+    wrap.appendChild(miniWrap);
+  }
+
+  return {
+    wrap,
+    setVisible: (v) => { wrap.style.display = v ? '' : 'none'; },
+    getStyle: () => ({ ...current })
+  };
 }
 
 function renderSubscribed(container, keys, overrides, writableSet, labels, writableLabelMap) {
@@ -116,9 +288,9 @@ function renderSubscribed(container, keys, overrides, writableSet, labels, writa
     // Show upgrade to writable if not already; writable lists get user editor
     if (!isWritable) {
       const addPrivBtn = document.createElement('button');
-      addPrivBtn.textContent = 'Add Key…';
+      addPrivBtn.textContent = 'Config…';
       addPrivBtn.addEventListener('click', async () => {
-        await openPrivateKeyModal(pk, (overrides && overrides[pk]) || 'block');
+        await openPrivateKeyModal(pk, typeSelect.value || (overrides && overrides[pk]) || 'block');
       });
       actions.appendChild(addPrivBtn);
     } else {
@@ -128,7 +300,7 @@ function renderSubscribed(container, keys, overrides, writableSet, labels, writa
       actions.appendChild(editUsersBtn);
       const manageBtn = document.createElement('button');
       manageBtn.textContent = 'Config…';
-      manageBtn.addEventListener('click', async () => { await openPrivateKeyModal(pk); });
+      manageBtn.addEventListener('click', async () => { await openPrivateKeyModal(pk, typeSelect.value || current); });
       actions.appendChild(manageBtn);
     }
     const removeBtn = document.createElement('button');
@@ -327,6 +499,23 @@ async function openPrivateKeyModal(publicKey, typeHint) {
   const { wrap: labelWrap, input: labelInput } = inputRow('Label (optional)', 'privLabel', (st.subscribedLabels && st.subscribedLabels[publicKey]) || existing?.label || '');
   labelInput.value = (st.subscribedLabels && st.subscribedLabels[publicKey]) || existing?.label || '';
 
+  const typeRaw = existing?.type || typeHint || (st.subscribedOverrides && st.subscribedOverrides[publicKey]) || 'block';
+  const type = (typeRaw || 'block').toLowerCase();
+  const styleCtrl = createHighlightStyleControl(publicKey, (st.highlightColors || {})[publicKey], null, {
+    mode: 'full',
+    palette: HIGHLIGHT_PALETTE
+  });
+  const colorDetails = document.createElement('details');
+  colorDetails.className = 'color-details';
+  colorDetails.open = false;
+  const colorSummary = document.createElement('summary');
+  colorSummary.textContent = 'Highlight colour';
+  colorDetails.appendChild(colorSummary);
+  colorDetails.appendChild(styleCtrl.wrap);
+  if (type !== 'highlight') {
+    colorDetails.style.display = 'none';
+  }
+
   // Reload list name from server
   const reloadBtn = document.createElement('button');
   reloadBtn.textContent = 'Reload';
@@ -417,6 +606,7 @@ async function openPrivateKeyModal(publicKey, typeHint) {
   body.appendChild(keyWrap);
   body.appendChild(keyRow);
   body.appendChild(baseDetails);
+  body.appendChild(colorDetails);
   body.appendChild(hint);
   body.appendChild(verifyStatus);
 
@@ -429,7 +619,6 @@ async function openPrivateKeyModal(publicKey, typeHint) {
       const priv = keyInput.value.trim();
       const label = labelInput.value.trim();
       const base = baseInput.value.trim().replace(/\/$/, '');
-      const type = existing?.type || typeHint || (st.subscribedOverrides && st.subscribedOverrides[publicKey]) || 'block';
 
       // If a private key is provided, verify it against the server
       if (priv) {
@@ -494,7 +683,14 @@ async function openPrivateKeyModal(publicKey, typeHint) {
       const st2 = await getState();
       const labels = { ...(st2.subscribedLabels || {}) };
       if (label) labels[publicKey] = label; else delete labels[publicKey];
-      await setState({ ...st2, subscribedLabels: labels });
+      const colors = { ...(st2.highlightColors || {}) };
+      const chosenStyle = type === 'highlight' ? styleCtrl.getStyle() : null;
+      if (chosenStyle && !isDefaultHighlightStyle(chosenStyle)) {
+        colors[publicKey] = normalizeHighlightStyle(chosenStyle);
+      } else {
+        delete colors[publicKey];
+      }
+      await setState({ ...st2, subscribedLabels: labels, highlightColors: colors });
       await mirrorSubscriptionsToSync();
       await refreshUI();
       el('modalRoot').classList.add('hidden');
@@ -702,7 +898,15 @@ async function removeHUser(name) {
 async function removeWritable(item) {
   const sync = await getSyncSettings();
   const items = (sync.writableLists || []).filter((x) => x.publicKey !== item.publicKey);
-  await setSyncSettings({ ...sync, writableLists: items });
+  const colors = { ...(sync.highlightColors || {}) };
+  if (item && item.publicKey) delete colors[item.publicKey];
+  await setSyncSettings({ ...sync, writableLists: items, highlightColors: colors });
+  const st = await getState();
+  if (st) {
+    const localColors = { ...(st.highlightColors || {}) };
+    if (item && item.publicKey) delete localColors[item.publicKey];
+    await setState({ ...st, highlightColors: localColors });
+  }
   await refreshUI();
 }
 

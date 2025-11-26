@@ -56,6 +56,21 @@
       .sub-flag { width: 18px; height: 18px; display:inline-flex; align-items:center; justify-content:center; border-radius: 50%; border:1px solid var(--border); font-size: 12px; }
       .sub-flag.readonly { background:#f3f4f6; color:#374151; }
       .sub-flag.writable { background:#dcfce7; color:#166534; border-color:#86efac; }
+      .color-control { gap: 8px; }
+      .color-control-compact { display: inline-flex; align-items: center; flex-wrap: wrap; }
+      .color-control-full { display: flex; flex-direction: column; }
+      .color-control input[type=color] { width: 42px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+      .color-control button { padding: 4px 8px; }
+      .color-palette { display: flex; gap: 8px; flex-wrap: wrap; }
+      .color-palette .swatch { min-width: 68px; border-radius: 6px; border: 1px solid var(--border); font-weight: 600; }
+      .color-palette .swatch.active { box-shadow: 0 0 0 2px #d1d5db inset; }
+      .color-fields { display: flex; gap: 12px; flex-wrap: wrap; }
+      .color-field { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
+      .color-field input[type=text] { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; box-sizing: border-box; }
+      .color-mini { display: inline-flex; align-items: center; gap: 6px; }
+      details.color-details summary { cursor: pointer; font-size: 13px; color: #374151; padding: 4px 0; }
+      details.color-details { border: none; padding: 0; margin-top: 10px; }
+      details.color-details .color-control { margin-top: 8px; }
       /* Local users (blocked / highlighted) */
       .user-pill-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
       .user-pill { display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:999px; border:1px solid var(--border); background:#f9fafb; }
@@ -206,6 +221,7 @@
       </div>
     </div>
 
+    <script src="common.js"></script>
     <script src="options.js"></script>
   </body>
   </html>
