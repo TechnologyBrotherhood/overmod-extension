@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Overmod for Hacker News",
   "description": "Hide threads from blocked users and highlight valuable users on Hacker News.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "permissions": [
     "storage"
   ],
