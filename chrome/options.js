@@ -15,6 +15,14 @@ function inputEl(id) { return /** @type {HTMLInputElement} */ (document.getEleme
 /** @returns {HTMLSelectElement} */
 function selectEl(id) { return /** @type {HTMLSelectElement} */ (document.getElementById(id)); }
 
+const HIGHLIGHT_PALETTE = [
+  { key: 'mint', label: 'Mint', bg: '#d9f99d', fg: '#14532d' },
+  { key: 'sky', label: 'Sky', bg: '#dbeafe', fg: '#1d4ed8' },
+  { key: 'lilac', label: 'Lilac', bg: '#ede9fe', fg: '#4c1d95' },
+  { key: 'coral', label: 'Coral', bg: '#ffe4e6', fg: '#9f1239' },
+  { key: 'default', label: 'Default', bg: DEFAULT_HIGHLIGHT_STYLE.bg, fg: DEFAULT_HIGHLIGHT_STYLE.fg }
+];
+
 async function blockUser(username, publicKey) {
   const resp = await chrome.runtime.sendMessage({ type: 'overmod:addBlock', username, publicKey });
   if (!resp || !resp.ok) {
@@ -57,7 +65,7 @@ async function mirrorSubscriptionsToSync() {
     subscribedLists: Array.isArray(st.subscribedLists) ? st.subscribedLists.slice() : [],
     subscribedOverrides: { ...(sync.subscribedOverrides || {}), ...(st.subscribedOverrides || {}) },
     subscribedLabels: { ...(sync.subscribedLabels || {}), ...(st.subscribedLabels || {}) },
-    highlightColors: { ...(st.highlightColors || {}) },
+    highlightColors: { ...(sync.highlightColors || {}), ...(st.highlightColors || {}) },
     localBlockedUsers: Array.isArray(st.localBlockedUsers) ? st.localBlockedUsers.slice() : [],
     highlightedUsers: Array.isArray(st.highlightedUsers) ? st.highlightedUsers.slice() : []
   };
@@ -101,13 +109,7 @@ function createHighlightStyleControl(publicKey, initialStyle, onChange, options 
   const mode = (options && options.mode) || 'compact';
   const palette = (options && Array.isArray(options.palette) && options.palette.length)
     ? options.palette
-    : [
-        { key: 'mint', label: 'Mint', bg: '#d9f99d', fg: '#14532d' },
-        { key: 'sky', label: 'Sky', bg: '#dbeafe', fg: '#1d4ed8' },
-        { key: 'lilac', label: 'Lilac', bg: '#ede9fe', fg: '#4c1d95' },
-        { key: 'coral', label: 'Coral', bg: '#ffe4e6', fg: '#9f1239' },
-        { key: 'default', label: 'Default', bg: DEFAULT_HIGHLIGHT_STYLE.bg, fg: DEFAULT_HIGHLIGHT_STYLE.fg }
-      ];
+    : HIGHLIGHT_PALETTE;
 
   const wrap = document.createElement('div');
   wrap.className = `color-control ${mode === 'full' ? 'color-control-full' : 'color-control-compact'}`;
@@ -501,13 +503,7 @@ async function openPrivateKeyModal(publicKey, typeHint) {
   const type = (typeRaw || 'block').toLowerCase();
   const styleCtrl = createHighlightStyleControl(publicKey, (st.highlightColors || {})[publicKey], null, {
     mode: 'full',
-    palette: [
-      { key: 'mint', label: 'Mint', bg: '#d9f99d', fg: '#14532d' },
-      { key: 'sky', label: 'Sky', bg: '#dbeafe', fg: '#1d4ed8' },
-      { key: 'lilac', label: 'Lilac', bg: '#ede9fe', fg: '#4c1d95' },
-      { key: 'coral', label: 'Coral', bg: '#ffe4e6', fg: '#9f1239' },
-      { key: 'default', label: 'Default', bg: DEFAULT_HIGHLIGHT_STYLE.bg, fg: DEFAULT_HIGHLIGHT_STYLE.fg }
-    ]
+    palette: HIGHLIGHT_PALETTE
   });
   const colorDetails = document.createElement('details');
   colorDetails.className = 'color-details';
@@ -519,7 +515,6 @@ async function openPrivateKeyModal(publicKey, typeHint) {
   if (type !== 'highlight') {
     colorDetails.style.display = 'none';
   }
-  styleCtrl.setVisible(type === 'highlight');
 
   // Reload list name from server
   const reloadBtn = document.createElement('button');
