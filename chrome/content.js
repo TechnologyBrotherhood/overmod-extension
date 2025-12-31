@@ -201,6 +201,13 @@
   function setHighlight(row, style) {
     if (!row) return;
     row.classList.add('overmod-highlight');
+    const commtexts = row.querySelectorAll('.commtext');
+    for (const el of commtexts) {
+      if (!el.dataset.overmodCommtextClass) {
+        el.dataset.overmodCommtextClass = el.className || '';
+      }
+      el.className = 'commtext';
+    }
     const normalized = normalizeHighlightStyle(style);
     const bg = normalized.bg || DEFAULT_HIGHLIGHT_STYLE.bg;
     const fg = normalized.fg || DEFAULT_HIGHLIGHT_STYLE.fg;
@@ -213,6 +220,13 @@
     row.classList.remove('overmod-highlight');
     row.style.removeProperty('--overmod-highlight-bg');
     row.style.removeProperty('--overmod-highlight-fg');
+    const commtexts = row.querySelectorAll('.commtext');
+    for (const el of commtexts) {
+      if (el.dataset.overmodCommtextClass) {
+        el.className = el.dataset.overmodCommtextClass;
+        delete el.dataset.overmodCommtextClass;
+      }
+    }
   }
 
   function buildHighlightStyleMap(state) {
