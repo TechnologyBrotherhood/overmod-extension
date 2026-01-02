@@ -1106,9 +1106,137 @@ function openSubscribedModal() {
     }
   });
 }
+// --- Export / Import ---
+// buildExportData, validateImportData, applyImportData are loaded from export-import.js
+
+async function exportSettings() {
+  const state = await getState();
+  const sync = await getSyncSettings();
+  const data = buildExportData(state, sync);
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `overmod-export-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function importSettings(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const text = e.target.result;
+        const data = JSON.parse(text);
+        const validation = validateImportData(data);
+        if (!validation.valid) {
+          reject(new Error(validation.error));
+          return;
+        }
+        const currentState = await getState();
+        const currentSync = await getSyncSettings();
+        const { nextState, nextSync } = applyImportData(data, currentState, currentSync);
+        await setState(nextState);
+        await setSyncSettings(nextSync);
+        // Trigger a sync to pull latest data for imported lists
+        try {
+          await chrome.runtime.sendMessage({ type: 'overmod:syncNow' });
+        } catch (_) {}
+        resolve({ success: true });
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsText(file);
+  });
+}
+
+function openImportModal() {
+  const body = document.createElement('div');
+  const hint = document.createElement('div');
+  hint.className = 'muted';
+  hint.textContent = 'Paste an Overmod export JSON below. This will replace your current settings.';
+  body.appendChild(hint);
+
+  const textWrap = document.createElement('div');
+  textWrap.style.marginTop = '12px';
+  const textArea = document.createElement('textarea');
+  textArea.id = 'importJson';
+  textArea.placeholder = '{"version": 2, "lists": {...}}';
+  textArea.style.minHeight = '150px';
+  textArea.style.fontFamily = 'monospace';
+  textArea.style.fontSize = '12px';
+  textWrap.appendChild(textArea);
+  body.appendChild(textWrap);
+
+  const statusEl = document.createElement('div');
+  statusEl.className = 'muted';
+  statusEl.style.marginTop = '8px';
+  body.appendChild(statusEl);
+
+  openModal({
+    title: 'Import Settings',
+    body,
+    primaryText: 'Import',
+    onPrimary: async () => {
+      const primaryBtn = el('modalPrimary');
+      const jsonText = textArea.value.trim();
+      if (!jsonText) {
+        statusEl.textContent = 'Please paste your config JSON';
+        statusEl.style.color = '#b91c1c';
+        return;
+      }
+      if (primaryBtn) {
+        primaryBtn.disabled = true;
+        primaryBtn.textContent = 'Importing…';
+      }
+      statusEl.textContent = 'Importing…';
+      statusEl.style.color = '#6b7280';
+      try {
+        const data = JSON.parse(jsonText);
+        const validation = validateImportData(data);
+        if (!validation.valid) {
+          throw new Error(validation.error);
+        }
+        const currentState = await getState();
+        const currentSync = await getSyncSettings();
+        const { nextState, nextSync } = applyImportData(data, currentState, currentSync);
+        await setState(nextState);
+        await setSyncSettings(nextSync);
+        // Trigger a sync to pull latest data for imported lists
+        try {
+          await chrome.runtime.sendMessage({ type: 'overmod:syncNow' });
+        } catch (_) {}
+        statusEl.textContent = 'Import successful!';
+        statusEl.style.color = '#16a34a';
+        await refreshUI();
+        setTimeout(() => {
+          el('modalRoot').classList.add('hidden');
+        }, 1000);
+      } catch (err) {
+        statusEl.textContent = 'Import failed: ' + err.message;
+        statusEl.style.color = '#b91c1c';
+        if (primaryBtn) {
+          primaryBtn.disabled = false;
+          primaryBtn.textContent = 'Import';
+        }
+      }
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const btnNew = document.getElementById('openNewBtn');
   const btnSub = document.getElementById('openSubBtn');
+  const btnExport = document.getElementById('exportBtn');
+  const btnImport = document.getElementById('importBtn');
   if (btnNew) btnNew.addEventListener('click', openNewUnifiedListModal);
   if (btnSub) btnSub.addEventListener('click', openSubscribedModal);
+  if (btnExport) btnExport.addEventListener('click', exportSettings);
+  if (btnImport) btnImport.addEventListener('click', openImportModal);
 });
