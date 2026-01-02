@@ -1015,6 +1015,7 @@ function openModal({ title, body, primaryText = 'OK', onPrimary, onCancel }) {
     document.removeEventListener('keydown', onKeydown);
   };
   el('modalPrimary').textContent = primaryText;
+  el('modalPrimary').disabled = false;
   el('modalPrimary').onclick = async () => { if (onPrimary) await onPrimary(); };
   el('modalCancel').onclick = () => { if (onCancel) onCancel(); close(); };
   el('modalClose').onclick = () => { if (onCancel) onCancel(); close(); };
