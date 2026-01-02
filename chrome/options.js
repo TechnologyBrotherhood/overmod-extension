@@ -63,9 +63,9 @@ async function mirrorSubscriptionsToSync() {
   const next = {
     ...sync,
     subscribedLists: Array.isArray(st.subscribedLists) ? st.subscribedLists.slice() : [],
-    subscribedOverrides: { ...(sync.subscribedOverrides || {}), ...(st.subscribedOverrides || {}) },
-    subscribedLabels: { ...(sync.subscribedLabels || {}), ...(st.subscribedLabels || {}) },
-    highlightColors: { ...(sync.highlightColors || {}), ...(st.highlightColors || {}) },
+    subscribedOverrides: st.subscribedOverrides || {},
+    subscribedLabels: st.subscribedLabels || {},
+    highlightColors: st.highlightColors || {},
     localBlockedUsers: Array.isArray(st.localBlockedUsers) ? st.localBlockedUsers.slice() : [],
     highlightedUsers: Array.isArray(st.highlightedUsers) ? st.highlightedUsers.slice() : []
   };

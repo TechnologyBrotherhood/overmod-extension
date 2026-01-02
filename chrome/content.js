@@ -14,7 +14,7 @@
     const STYLE = `
     .overmod-hidden { display: none !important; }
     .overmod-highlight > td { background: var(--overmod-highlight-bg, ${DEFAULT_HIGHLIGHT_STYLE.bg}) !important; color: var(--overmod-highlight-fg, ${DEFAULT_HIGHLIGHT_STYLE.fg}) !important; }
-    .overmod-highlight a, .overmod-highlight a:visited, .overmod-highlight .hnuser { color: var(--overmod-highlight-fg, ${DEFAULT_HIGHLIGHT_STYLE.fg}) !important; }
+    .overmod-highlight a, .overmod-highlight a:visited, .overmod-highlight .hnuser, .overmod-highlight .commtext { color: var(--overmod-highlight-fg, ${DEFAULT_HIGHLIGHT_STYLE.fg}) !important; }
     .overmod-inline-action { color: #828282; margin-left: 6px; font-size: 12px; }
     .overmod-inline-action a { color: #828282; text-decoration: none; }
     .overmod-inline-action a:hover { text-decoration: underline; }
@@ -241,7 +241,7 @@
       seen.add(pk);
       const users = sources[pk] || [];
       const style = normalizeHighlightStyle(colors[pk]);
-      if ((!style.bg && !style.fg) || !Array.isArray(users) || !users.length) return;
+      if (!Array.isArray(users) || !users.length) return;
       for (const name of users) {
         const key = String(name || '').toLowerCase();
         if (!key || map.has(key)) continue;
