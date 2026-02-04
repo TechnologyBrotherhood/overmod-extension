@@ -12,6 +12,7 @@ const state = {
   subscribedOverrides: { pk1: 'block', pk2: 'highlight' },
   subscribedLabels: { pk1: 'Block List', pk2: 'Highlight List' },
   highlightColors: { pk2: { bg: '#d9f99d', fg: '#14532d' } },
+  transientLists: { pk1: true },
   localBlockedUsers: ['blocked1', 'blocked2'],
   highlightedUsers: ['good1'],
   apiBaseUrl: 'https://custom.overmod.org'
@@ -40,6 +41,7 @@ assert.deepStrictEqual(new Set(nextState.subscribedLists), new Set(state.subscri
 assert.deepStrictEqual(nextState.subscribedOverrides, state.subscribedOverrides, 'subscribedOverrides mismatch');
 assert.deepStrictEqual(nextState.subscribedLabels, state.subscribedLabels, 'subscribedLabels mismatch');
 assert.deepStrictEqual(nextState.highlightColors, state.highlightColors, 'highlightColors mismatch');
+assert.deepStrictEqual(nextState.transientLists, state.transientLists, 'transientLists mismatch');
 assert.deepStrictEqual(nextState.localBlockedUsers, state.localBlockedUsers, 'localBlockedUsers mismatch');
 assert.deepStrictEqual(nextState.highlightedUsers, state.highlightedUsers, 'highlightedUsers mismatch');
 assert.strictEqual(nextState.apiBaseUrl, state.apiBaseUrl, 'apiBaseUrl mismatch');

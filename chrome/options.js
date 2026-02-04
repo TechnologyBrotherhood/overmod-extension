@@ -48,6 +48,7 @@ async function getSyncSettings() {
     subscribedOverrides: raw.subscribedOverrides && typeof raw.subscribedOverrides === 'object' ? raw.subscribedOverrides : {},
     subscribedLabels: raw.subscribedLabels && typeof raw.subscribedLabels === 'object' ? raw.subscribedLabels : {},
     highlightColors: raw.highlightColors && typeof raw.highlightColors === 'object' ? raw.highlightColors : {},
+    transientLists: raw.transientLists && typeof raw.transientLists === 'object' ? raw.transientLists : {},
     localBlockedUsers: Array.isArray(raw.localBlockedUsers) ? raw.localBlockedUsers : [],
     highlightedUsers: Array.isArray(raw.highlightedUsers) ? raw.highlightedUsers : []
   };
@@ -66,6 +67,7 @@ async function mirrorSubscriptionsToSync() {
     subscribedOverrides: st.subscribedOverrides || {},
     subscribedLabels: st.subscribedLabels || {},
     highlightColors: st.highlightColors || {},
+    transientLists: st.transientLists || {},
     localBlockedUsers: Array.isArray(st.localBlockedUsers) ? st.localBlockedUsers.slice() : [],
     highlightedUsers: Array.isArray(st.highlightedUsers) ? st.highlightedUsers.slice() : []
   };
@@ -249,7 +251,7 @@ function createHighlightStyleControl(publicKey, initialStyle, onChange, options 
   };
 }
 
-function renderSubscribed(container, keys, overrides, writableSet, labels, writableLabelMap) {
+function renderSubscribed(container, keys, overrides, writableSet, labels, writableLabelMap, transientMap) {
   container.innerHTML = '';
   (keys || []).forEach((pk, _) => {
     const li = document.createElement('li');
@@ -258,8 +260,11 @@ function renderSubscribed(container, keys, overrides, writableSet, labels, writa
     const handle = document.createElement('span'); handle.className = 'drag-handle'; handle.title='Drag to reorder'; handle.textContent='≡';
     const flag = document.createElement('span');
     const isWritable = writableSet && writableSet.has(pk);
-    flag.className = `sub-flag ${isWritable ? 'writable' : 'readonly'}`;
-    flag.title = isWritable ? 'Writable (private key added)' : 'Subscribed only (read-only)';
+    const isTransient = !!(transientMap && transientMap[pk]);
+    flag.className = `sub-flag ${isWritable ? 'writable' : 'readonly'}${isTransient ? ' transient' : ''}`;
+    flag.title = isWritable
+      ? (isTransient ? 'Writable (private key added) • Transient' : 'Writable (private key added)')
+      : (isTransient ? 'Subscribed only (read-only) • Transient' : 'Subscribed only (read-only)');
     flag.textContent = isWritable ? '🔑' : '🗂️';
     const baseName =
       (labels && labels[pk]) ? String(labels[pk]) :
@@ -271,6 +276,7 @@ function renderSubscribed(container, keys, overrides, writableSet, labels, writa
     left.appendChild(handle); left.appendChild(flag); left.appendChild(nameEl);
 
     const actions = document.createElement('div'); actions.className = 'sub-actions';
+    const isTransientAllowed = !!(transientMap && transientMap[pk]);
     const typeSelect = document.createElement('select');
     const current = (overrides && overrides[pk]) || 'block';
     ['block','highlight'].forEach(t => { const o = document.createElement('option'); o.value=t; o.textContent=t; if (current===t) o.selected=true; typeSelect.appendChild(o); });
@@ -458,7 +464,8 @@ async function refreshUI() {
     state.subscribedOverrides || {},
     writableSet,
     state.subscribedLabels || {},
-    writableLabelMap
+    writableLabelMap,
+    { ...(state.transientLists || {}), ...(sync.transientLists || {}) }
   );
   // Unsubscribed writable lists (writable but not in subscribedLists)
   const subscribedSet = new Set((state.subscribedLists || []).map(pk => String(pk)));
@@ -595,6 +602,31 @@ async function openPrivateKeyModal(publicKey, typeHint) {
   baseDetails.appendChild(baseSummary);
   baseDetails.appendChild(baseWrap);
 
+  const transientWrap = document.createElement('div');
+  transientWrap.className = 'row';
+  const transientCheckbox = document.createElement('input');
+  transientCheckbox.type = 'checkbox';
+  transientCheckbox.id = 'privTransient';
+  const transientMap = { ...(st.transientLists || {}), ...(sync.transientLists || {}) };
+  transientCheckbox.checked = !!transientMap[publicKey];
+  const transientTextWrap = document.createElement('div');
+  transientTextWrap.style.display = 'flex';
+  transientTextWrap.style.flexDirection = 'column';
+  const transientLabel = document.createElement('label');
+  transientLabel.htmlFor = 'privTransient';
+  transientLabel.textContent = 'Allow transient unblocking';
+  const transientHint = document.createElement('span');
+  transientHint.className = 'muted';
+  transientHint.textContent = 'When enabled, this block list can be temporarily ignored with “Show others”.';
+  transientTextWrap.appendChild(transientLabel);
+  transientTextWrap.appendChild(transientHint);
+  transientWrap.appendChild(transientCheckbox);
+  transientWrap.appendChild(transientTextWrap);
+  // Only show transient option for block lists
+  if (type !== 'block') {
+    transientWrap.style.display = 'none';
+  }
+
   const hint = document.createElement('div'); hint.className='muted'; hint.textContent = 'Clear the field and click Save to remove the private key.';
   const verifyStatus = document.createElement('div');
   verifyStatus.className = 'muted';
@@ -606,6 +638,7 @@ async function openPrivateKeyModal(publicKey, typeHint) {
   body.appendChild(keyWrap);
   body.appendChild(keyRow);
   body.appendChild(baseDetails);
+  body.appendChild(transientWrap);
   body.appendChild(colorDetails);
   body.appendChild(hint);
   body.appendChild(verifyStatus);
@@ -690,8 +723,14 @@ async function openPrivateKeyModal(publicKey, typeHint) {
       } else {
         delete colors[publicKey];
       }
-      await setState({ ...st2, subscribedLabels: labels, highlightColors: colors });
+      const transient = { ...(st2.transientLists || {}) };
+      if (transientCheckbox.checked && type === 'block') transient[publicKey] = true; else delete transient[publicKey];
+      await setState({ ...st2, subscribedLabels: labels, highlightColors: colors, transientLists: transient });
+      const syncAfter = await getSyncSettings();
+      await setSyncSettings({ ...syncAfter, transientLists: { ...(syncAfter.transientLists || {}), ...transient } });
       await mirrorSubscriptionsToSync();
+      // Re-sync blocklists to recompute transientOnly
+      try { await chrome.runtime.sendMessage({ type: 'overmod:syncNow' }); } catch (_) {}
       await refreshUI();
       el('modalRoot').classList.add('hidden');
     }
@@ -900,12 +939,16 @@ async function removeWritable(item) {
   const items = (sync.writableLists || []).filter((x) => x.publicKey !== item.publicKey);
   const colors = { ...(sync.highlightColors || {}) };
   if (item && item.publicKey) delete colors[item.publicKey];
-  await setSyncSettings({ ...sync, writableLists: items, highlightColors: colors });
+  const transient = { ...(sync.transientLists || {}) };
+  if (item && item.publicKey) delete transient[item.publicKey];
+  await setSyncSettings({ ...sync, writableLists: items, highlightColors: colors, transientLists: transient });
   const st = await getState();
   if (st) {
     const localColors = { ...(st.highlightColors || {}) };
     if (item && item.publicKey) delete localColors[item.publicKey];
-    await setState({ ...st, highlightColors: localColors });
+    const localTransient = { ...(st.transientLists || {}) };
+    if (item && item.publicKey) delete localTransient[item.publicKey];
+    await setState({ ...st, highlightColors: localColors, transientLists: localTransient });
   }
   await refreshUI();
 }

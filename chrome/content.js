@@ -20,6 +20,9 @@
     .overmod-inline-action a:hover { text-decoration: underline; }
     tr.overmod-collapsed td.default { color: #828282; font-style: italic; }
     .overmod-collapsed-label { color: #828282; }
+    #overmod-transient-toggle { margin-left: 4px; font-size: inherit; color: #828282; }
+    #overmod-transient-toggle a { color: inherit; text-decoration: none; }
+    #overmod-transient-toggle a:hover { text-decoration: underline; }
   `;
 
     if (document.getElementById("overmod-style")) return;
@@ -251,6 +254,85 @@
     ordered.forEach(applyList);
     Object.keys(sources || {}).forEach(applyList);
     return map;
+  }
+
+  function getNavContainer() {
+    const span = document.querySelector('span.pagetop');
+    if (span) return span;
+    const td = document.querySelector('#hnmain .pagetop');
+    return td || null;
+  }
+
+  function getCommentsLink() {
+    // Find the "X comments" link in the subtext (item page)
+    const subtext = document.querySelector('td.subtext');
+    if (!subtext) return null;
+    const links = subtext.querySelectorAll('a');
+    for (const link of links) {
+      if (/\d+\s*comments?/.test(link.textContent) || link.textContent === 'discuss') {
+        return link;
+      }
+    }
+    return null;
+  }
+
+  function countCommentsByAuthors(index, authorSet) {
+    if (!authorSet || authorSet.size === 0) return 0;
+    let count = 0;
+    for (const item of index) {
+      const author = item.author?.toLowerCase?.() || '';
+      if (author && authorSet.has(author)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  function renderTransientToggle(state, onToggle, index) {
+    const commentsLink = getCommentsLink();
+    const transientOnly = Array.isArray(state?.blocked?.transientOnly) ? state.blocked.transientOnly : [];
+    const transientOnlySet = new Set(transientOnly.map(s => String(s).toLowerCase()));
+    const persistentBlocked = Array.isArray(state?.blocked?.combinedWithoutTransient) ? state.blocked.combinedWithoutTransient : [];
+    const persistentBlockedSet = new Set(persistentBlocked.map(s => String(s).toLowerCase()));
+
+    const hiddenCount = index ? countCommentsByAuthors(index, transientOnlySet) : 0;
+    const blockedCount = index ? countCommentsByAuthors(index, persistentBlockedSet) : 0;
+
+    const transientListKeys = Object.keys(state?.transientLists || {}).filter(k => state.transientLists[k]);
+    const hasTransientLists = transientListKeys.length > 0;
+
+    // Remove existing toggle if no transient lists configured or no comments link
+    if (!commentsLink || !hasTransientLists) {
+      const existing = document.getElementById('overmod-transient-toggle');
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      return;
+    }
+
+    let slot = document.getElementById('overmod-transient-toggle');
+    if (!slot) {
+      slot = document.createElement('span');
+      slot.id = 'overmod-transient-toggle';
+      // Insert after the comments link
+      commentsLink.parentNode.insertBefore(slot, commentsLink.nextSibling);
+    }
+    slot.textContent = '';
+    const link = document.createElement('a');
+    const active = !!state?.transientUnblockActive;
+    link.href = '#';
+    link.textContent = active ? `(${hiddenCount} shown, ${blockedCount} blocked)` : `(${hiddenCount} hidden, ${blockedCount} blocked)`;
+    link.title = active ? 'Re-hide transient comments' : 'Temporarily show comments from transient block lists';
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (slot.dataset.busy === '1') return;
+      slot.dataset.busy = '1';
+      link.textContent = active ? '(hiding…)' : '(showing…)';
+      try {
+        await onToggle(!active);
+      } finally {
+        slot.dataset.busy = '0';
+      }
+    }, { once: true });
+    slot.appendChild(link);
   }
 
   function applyBlocking(index, blockedSet) {
@@ -552,7 +634,28 @@
       state = { ...local.overmod };
     }
     let userStyleMap = buildHighlightStyleMap(state);
-    const blockedSet = new Set((state?.blocked?.combined || []).map((s) => String(s).toLowerCase()));
+    let blockedAll = new Set((state?.blocked?.combined || []).map((s) => String(s).toLowerCase()));
+    let blockedPersistent = new Set(((state?.blocked?.combinedWithoutTransient) || (state?.blocked?.combined) || []).map((s) => String(s).toLowerCase()));
+    // Transient unblock is always off on page load (per-page-view, not persisted)
+    let transientActive = false;
+    const updateBlockedSetsFromState = (st) => {
+      blockedAll = new Set(((st?.blocked?.combined) || []).map((s) => String(s).toLowerCase()));
+      const withoutTransient = (st?.blocked?.combinedWithoutTransient) || null;
+      blockedPersistent = new Set(((withoutTransient && withoutTransient.length ? withoutTransient : (st?.blocked?.combined || []))).map((s) => String(s).toLowerCase()));
+      transientActive = !!st?.transientUnblockActive;
+    };
+    const applyCurrentBlocking = () => {
+      if (isThreadsPage()) return;
+      const activeSet = transientActive ? blockedPersistent : blockedAll;
+      applyBlocking(index, activeSet);
+      reorderBlockedRoots(index);
+    };
+    const handleTransientToggle = async (enabled) => {
+      // Transient unblock is per-page-view only, not persisted
+      transientActive = enabled;
+      applyCurrentBlocking();
+      renderTransientToggle({ ...state, transientUnblockActive: enabled }, handleTransientToggle, index);
+    };
 
     // Load highlights
     const { highlighted } = await getLocalState();
@@ -563,12 +666,10 @@
     ]);
 
     // Apply
-    if (!isThreadsPage()) {
-      applyBlocking(index, blockedSet);
-      reorderBlockedRoots(index);
-    }
+    applyCurrentBlocking();
     applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleMap);
     // No injected per-comment actions
+    renderTransientToggle({ ...state, transientUnblockActive: transientActive }, handleTransientToggle, index);
 
     // React to storage updates (e.g., sync completes or user changes settings)
     chrome.storage.onChanged.addListener(async (changes, area) => {
@@ -579,14 +680,17 @@
       if (changes.overmod) {
         state = changes.overmod.newValue || state;
         userStyleMap = buildHighlightStyleMap(state || {});
+        updateBlockedSetsFromState(state);
       }
       if (needReblock || changes.overmod) {
         const st = changes.overmod ? changes.overmod.newValue : null;
         const nextBlocked = new Set(((st?.blocked?.combined) || (state?.blocked?.combined) || []).map((s) => String(s).toLowerCase()));
-        if (!isThreadsPage()) {
-          applyBlocking(index, nextBlocked);
-          reorderBlockedRoots(index);
-        }
+        const nextPersistent = new Set(((st?.blocked?.combinedWithoutTransient) || (state?.blocked?.combinedWithoutTransient) || (state?.blocked?.combined) || []).map((s) => String(s).toLowerCase()));
+        blockedAll = nextBlocked;
+        blockedPersistent = nextPersistent;
+        // Don't change transientActive from storage - it's per-page-view only
+        applyCurrentBlocking();
+        renderTransientToggle({ ...(changes.overmod.newValue || state), transientUnblockActive: transientActive }, handleTransientToggle, index);
         const hlUsers = new Set(((st?.highlightedUsers) || (state?.highlightedUsers) || []).map(s => String(s).toLowerCase()));
         // type tagging required for IntelliJ to not complain
         /** @type {Record<string, boolean>} */

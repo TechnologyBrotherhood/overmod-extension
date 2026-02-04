@@ -44,6 +44,10 @@ const SerializerV2 = {
         entry.highlightColor = state.highlightColors[pk];
       }
 
+      if (state.transientLists && state.transientLists[pk]) {
+        entry.transient = true;
+      }
+
       lists[pk] = entry;
     }
 
@@ -84,6 +88,9 @@ const SerializerV2 = {
         if (entry.type !== undefined && entry.type !== 'block' && entry.type !== 'highlight') {
           return { valid: false, error: `lists["${pk}"].type must be "block" or "highlight"` };
         }
+        if (entry.transient !== undefined && typeof entry.transient !== 'boolean') {
+          return { valid: false, error: `lists["${pk}"].transient must be boolean` };
+        }
       }
     }
     return { valid: true };
@@ -94,6 +101,7 @@ const SerializerV2 = {
     const subscribedOverrides = {};
     const subscribedLabels = {};
     const highlightColors = {};
+    const transientLists = {};
     const writableLists = [];
 
     for (const [pk, entry] of Object.entries(data.lists || {})) {
@@ -102,6 +110,7 @@ const SerializerV2 = {
         if (entry.type) subscribedOverrides[pk] = entry.type;
         if (entry.label) subscribedLabels[pk] = entry.label;
         if (entry.highlightColor) highlightColors[pk] = entry.highlightColor;
+        if (entry.transient === true) transientLists[pk] = true;
       }
 
       if (entry.privateKey) {
@@ -123,6 +132,8 @@ const SerializerV2 = {
     nextSync.subscribedLabels = subscribedLabels;
     nextState.highlightColors = highlightColors;
     nextSync.highlightColors = highlightColors;
+    nextState.transientLists = transientLists;
+    nextSync.transientLists = transientLists;
     nextSync.writableLists = writableLists;
 
     if (Array.isArray(data.localBlockedUsers)) {

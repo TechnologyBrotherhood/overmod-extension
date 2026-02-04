@@ -6,13 +6,17 @@ const DEFAULT_SETTINGS = {
   subscribedOverrides: {}, // publicKey -> 'block' | 'highlight'
   subscribedLabels: {}, // publicKey -> label
   highlightColors: {}, // publicKey -> custom highlight color (hex/rgb) for highlight lists
+  transientLists: {}, // publicKey -> true when list is treated as transient (toggleable)
   localBlockedUsers: [], // local-only blocked usernames
   highlightedUsers: [], // local-only highlighted usernames
   hideMode: "remove", // or "collapse" in future
+  transientUnblockActive: false, // when true, transient lists are temporarily ignored
   // Lists we can write to: [{ label?: string, publicKey: string, privateKey: string }]
   writableLists: [],
   blocked: {
     combined: [], // merged unique usernames from all sources
+    combinedWithoutTransient: [], // merged blocked with transient lists ignored
+    transientOnly: [], // blocked only via transient lists (for toggling)
     sourceLists: {}, // publicKey -> usernames[]
     lastSync: null
   },
@@ -72,6 +76,7 @@ const DEFAULT_SYNC = {
   subscribedOverrides: {},
   subscribedLabels: {},
   highlightColors: {},
+  transientLists: {},
   localBlockedUsers: [],
   highlightedUsers: []
 };
@@ -84,6 +89,9 @@ async function getSyncSettings() {
     ...raw,
     highlightColors: raw.highlightColors && typeof raw.highlightColors === 'object'
       ? raw.highlightColors
+      : {},
+    transientLists: raw.transientLists && typeof raw.transientLists === 'object'
+      ? raw.transientLists
       : {}
   };
 }
@@ -119,6 +127,10 @@ async function getFullState() {
     highlightColors: {
       ...(local.highlightColors || {}),
       ...(sync.highlightColors || {})
+    },
+    transientLists: {
+      ...(local.transientLists || {}),
+      ...(sync.transientLists || {})
     },
     localBlockedUsers: mergedLocalBlocked,
     highlightedUsers: mergedHighlightedUsers,
@@ -157,6 +169,12 @@ async function ensureDefaults() {
     merged.highlightColors = {
       ...(merged.highlightColors || {}),
       ...sync.highlightColors
+    };
+  }
+  if (sync.transientLists && typeof sync.transientLists === 'object') {
+    merged.transientLists = {
+      ...(merged.transientLists || {}),
+      ...sync.transientLists
     };
   }
 
@@ -204,6 +222,7 @@ async function syncBlocklists() {
   const usersByList = {};
   const effectiveType = {};
   const labels = { ...(state.subscribedLabels || {}) };
+  const transientFlags = state.transientLists || {};
   for (const pk of lists) {
     const trimmed = String(pk || "").trim();
     if (!trimmed) continue;
@@ -251,34 +270,59 @@ async function syncBlocklists() {
   }
 
   // Priority-based classification (first list wins), local overrides win globally
-  const decision = new Map(); // name -> 'block' | 'highlight'
+  const decision = new Map(); // all sources applied
+  const decisionPersistent = new Map(); // transient block lists ignored
   // Local highlights first (highest priority)
-  for (const n of toNameSet(state.highlightedUsers)) decision.set(n, 'highlight');
+  for (const n of toNameSet(state.highlightedUsers)) {
+    decision.set(n, 'highlight');
+    decisionPersistent.set(n, 'highlight');
+  }
   // Local blocks next if not already decided
-  for (const n of toNameSet(state.localBlockedUsers)) if (!decision.has(n)) decision.set(n, 'block');
+  for (const n of toNameSet(state.localBlockedUsers)) {
+    if (!decision.has(n)) decision.set(n, 'block');
+    if (!decisionPersistent.has(n)) decisionPersistent.set(n, 'block');
+  }
   // Apply subscribed lists in saved order; earlier has higher priority
   for (const pk of lists) {
     const typ = effectiveType[pk] || 'block';
     const arr = usersByList[pk] || [];
+    const isTransientBlock = typ === 'block' && !!transientFlags[pk];
     for (const name of arr) {
       const key = String(name).toLowerCase();
       if (!decision.has(key)) decision.set(key, typ);
+      if (!isTransientBlock && !decisionPersistent.has(key)) {
+        decisionPersistent.set(key, typ);
+      }
     }
   }
 
   const mergedBlocked = [];
   const mergedHighlighted = [];
+  const mergedBlockedPersistent = [];
+  const mergedHighlightedPersistent = [];
+
   for (const [name, typ] of decision.entries()) {
     if (typ === 'highlight') mergedHighlighted.push(name); else mergedBlocked.push(name);
   }
+  for (const [name, typ] of decisionPersistent.entries()) {
+    if (typ === 'highlight') mergedHighlightedPersistent.push(name); else mergedBlockedPersistent.push(name);
+  }
   mergedBlocked.sort();
+  mergedBlockedPersistent.sort();
   mergedHighlighted.sort();
+  mergedHighlightedPersistent.sort();
+
+  // Users blocked only by transient lists (removed when toggle is active)
+  const persistentBlockedSet = new Set(mergedBlockedPersistent);
+  const transientOnly = mergedBlocked.filter((n) => !persistentBlockedSet.has(n));
 
   const next = {
     ...state,
     subscribedLabels: labels,
     blocked: {
       combined: Array.from(mergedBlocked),
+      combinedWithoutTransient: Array.from(mergedBlockedPersistent),
+      transientOnly,
       sourceLists,
       lastSync: Date.now()
     },
@@ -464,20 +508,26 @@ async function subscribeList(publicKey, listType, name) {
     ...(state.highlightColors || {}),
     ...(sync.highlightColors || {})
   };
+  const transientLists = {
+    ...(state.transientLists || {}),
+    ...(sync.transientLists || {})
+  };
 
   const next = {
     ...state,
     subscribedLists: lists,
     subscribedOverrides: overrides,
     subscribedLabels: labels,
-    highlightColors
+    highlightColors,
+    transientLists
   };
   const nextSync = {
     ...sync,
     subscribedLists: lists.slice(),
     subscribedOverrides: { ...(sync.subscribedOverrides || {}), ...overrides },
     subscribedLabels: { ...(sync.subscribedLabels || {}), ...labels },
-    highlightColors
+    highlightColors,
+    transientLists
   };
   await Promise.all([setState(next), setSyncSettings(nextSync)]);
   try { await syncBlocklists(); } catch (_) {}
@@ -499,13 +549,16 @@ async function unsubscribeList(publicKey) {
   delete labels[pk];
   const colors = { ...(state.highlightColors || {}) };
   delete colors[pk];
+  const transient = { ...(state.transientLists || {}) };
+  delete transient[pk];
 
   const next = {
     ...state,
     subscribedLists: filtered,
     subscribedOverrides: overrides,
     subscribedLabels: labels,
-    highlightColors: colors
+    highlightColors: colors,
+    transientLists: transient
   };
   const nextSync = {
     ...sync,
@@ -514,6 +567,11 @@ async function unsubscribeList(publicKey) {
     subscribedLabels: { ...(sync.subscribedLabels || {}), ...labels },
     highlightColors: (() => {
       const merged = { ...(sync.highlightColors || {}) , ...colors };
+      delete merged[pk];
+      return merged;
+    })(),
+    transientLists: (() => {
+      const merged = { ...(sync.transientLists || {}), ...transient };
       delete merged[pk];
       return merged;
     })()
@@ -642,6 +700,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         try {
           await openOptionsPage();
           sendResponse({ ok: true });
+        } catch (err) {
+          sendResponse({ ok: false, error: String(err) });
+        }
+        break;
+      }
+      case "overmod:setTransientUnblock": {
+        try {
+          const { enabled } = message;
+          const state = await getState();
+          const next = { ...state, transientUnblockActive: !!enabled };
+          await setState(next);
+          sendResponse({ ok: true, state: next });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });
         }
