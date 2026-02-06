@@ -23,6 +23,7 @@
     #overmod-transient-toggle { margin-left: 4px; font-size: inherit; color: #828282; }
     #overmod-transient-toggle a { color: inherit; text-decoration: none; }
     #overmod-transient-toggle a:hover { text-decoration: underline; }
+    #overmod-removed-banner td { padding: 4px 10px; color: #828282; font-size: 10pt; }
   `;
 
     if (document.getElementById("overmod-style")) return;
@@ -350,6 +351,30 @@
     }
   }
 
+  function renderRemovedBanner(index, blockedSet) {
+    const existing = document.getElementById('overmod-removed-banner');
+    if (existing) existing.remove();
+    if (!blockedSet || blockedSet.size === 0 || !index.length) return;
+
+    let count = 0;
+    for (const item of index) {
+      const name = item.author?.toLowerCase?.() || '';
+      if (name && blockedSet.has(name)) count++;
+    }
+    if (count === 0) return;
+
+    const firstRow = index[0].row;
+    const parent = firstRow.parentNode;
+    if (!parent) return;
+
+    const tr = document.createElement('tr');
+    tr.id = 'overmod-removed-banner';
+    const td = document.createElement('td');
+    td.textContent = `${count} comment${count !== 1 ? 's' : ''} removed`;
+    tr.appendChild(td);
+    parent.insertBefore(tr, firstRow);
+  }
+
   function applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleMap) {
     // Clear previous
     for (const item of index) clearHighlight(item.row);
@@ -645,10 +670,18 @@
       transientActive = !!st?.transientUnblockActive;
     };
     const applyCurrentBlocking = () => {
-      if (isThreadsPage()) return;
       const activeSet = transientActive ? blockedPersistent : blockedAll;
-      applyBlocking(index, activeSet);
+      let effectiveSet = activeSet;
+      if (isThreadsPage()) {
+        const pageUser = getUserPageUsername().toLowerCase();
+        if (pageUser && activeSet.has(pageUser)) {
+          effectiveSet = new Set(activeSet);
+          effectiveSet.delete(pageUser);
+        }
+      }
+      applyBlocking(index, effectiveSet);
       reorderBlockedRoots(index);
+      renderRemovedBanner(index, effectiveSet);
     };
     const handleTransientToggle = async (enabled) => {
       // Transient unblock is per-page-view only, not persisted
