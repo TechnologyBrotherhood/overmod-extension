@@ -451,6 +451,7 @@ async function refreshUI() {
   const state = await getState();
   inputEl('apiBaseUrl').value = state.apiBaseUrl || 'https://api.overmod.org';
   selectEl('hideMode').value = state.hideMode || 'remove';
+  inputEl('hideGreen').checked = !!state.hideGreenComments;
   let sync = await getSyncSettings();
   const writableSet = new Set((sync.writableLists || []).map(w => w.publicKey));
   const writableLabelMap = {};
@@ -984,6 +985,10 @@ document.addEventListener('DOMContentLoaded', () => {
   el('addUserBtn').addEventListener('click', addUser);
   el('apiBaseUrl').addEventListener('change', saveApiBaseUrl);
   el('hideMode').addEventListener('change', saveHideMode);
+  el('hideGreen').addEventListener('change', async () => {
+    const state = await getState();
+    await setState({ ...state, hideGreenComments: inputEl('hideGreen').checked });
+  });
   el('syncBtn').addEventListener('click', syncNow);
   el('addHUserBtn').addEventListener('click', addHUser);
   void refreshUI();

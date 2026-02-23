@@ -20,10 +20,13 @@
     .overmod-inline-action a:hover { text-decoration: underline; }
     tr.overmod-collapsed td.default { color: #828282; font-style: italic; }
     .overmod-collapsed-label { color: #828282; }
-    #overmod-transient-toggle { margin-left: 4px; font-size: inherit; color: #828282; }
+    #overmod-transient-toggle { font-size: inherit; color: #828282; }
     #overmod-transient-toggle a { color: inherit; text-decoration: none; }
     #overmod-transient-toggle a:hover { text-decoration: underline; }
     #overmod-removed-banner td { padding: 4px 10px; color: #828282; font-size: 10pt; }
+    #overmod-green-toggle { font-size: inherit; color: #828282; }
+    #overmod-green-toggle a { color: inherit; text-decoration: none; }
+    #overmod-green-toggle a:hover { text-decoration: underline; }
   `;
 
     if (document.getElementById("overmod-style")) return;
@@ -116,13 +119,28 @@
     return row.getAttribute('id') || '';
   }
 
+  function isGreenComment(row) {
+    const hnuser = row.querySelector('.hnuser');
+    if (!hnuser) return false;
+    // HN wraps new-account usernames in <font color="#3c963c"> inside .hnuser
+    const font = hnuser.querySelector('font[color]');
+    if (!font) return false;
+    const hex = (font.getAttribute('color') || '').replace('#', '');
+    if (!/^[0-9a-f]{6}$/i.test(hex)) return false;
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return g > r && g > b;
+  }
+
   function buildIndex(rows) {
     // Precompute indent and id for each row
     return rows.map((row) => ({
       row,
       id: getCommentId(row),
       author: getAuthor(row),
-      indent: getIndentLevel(row)
+      indent: getIndentLevel(row),
+      isGreen: isGreenComment(row)
     }));
   }
 
@@ -317,18 +335,57 @@
       commentsLink.parentNode.insertBefore(slot, commentsLink.nextSibling);
     }
     slot.textContent = '';
-    const link = document.createElement('a');
     const active = !!state?.transientUnblockActive;
+    slot.appendChild(document.createTextNode(' | '));
+    const link = document.createElement('a');
     link.href = '#';
-    link.textContent = active ? `(${hiddenCount} shown, ${blockedCount} blocked)` : `(${hiddenCount} hidden, ${blockedCount} blocked)`;
+    link.textContent = active ? `${hiddenCount} shown` : `${hiddenCount} hidden`;
     link.title = active ? 'Re-hide transient comments' : 'Temporarily show comments from transient block lists';
     link.addEventListener('click', async (e) => {
       e.preventDefault();
       if (slot.dataset.busy === '1') return;
       slot.dataset.busy = '1';
-      link.textContent = active ? '(hiding…)' : '(showing…)';
+      link.textContent = active ? 'hiding\u2026' : 'showing\u2026';
       try {
         await onToggle(!active);
+      } finally {
+        slot.dataset.busy = '0';
+      }
+    }, { once: true });
+    slot.appendChild(link);
+    if (blockedCount > 0) {
+      slot.appendChild(document.createTextNode(` | ${blockedCount} blocked`));
+    }
+  }
+
+  function renderGreenToggle(greenCount, isShowing, onToggle) {
+    const commentsLink = getCommentsLink();
+    if (!commentsLink || greenCount === 0) {
+      const existing = document.getElementById('overmod-green-toggle');
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      return;
+    }
+
+    let slot = document.getElementById('overmod-green-toggle');
+    if (!slot) {
+      slot = document.createElement('span');
+      slot.id = 'overmod-green-toggle';
+      const transientToggle = document.getElementById('overmod-transient-toggle');
+      const insertAfter = transientToggle || commentsLink;
+      insertAfter.parentNode.insertBefore(slot, insertAfter.nextSibling);
+    }
+    slot.textContent = '';
+    slot.appendChild(document.createTextNode(' | '));
+    const link = document.createElement('a');
+    link.href = '#';
+    link.textContent = isShowing ? `${greenCount} green shown` : `${greenCount} green`;
+    link.title = isShowing ? 'Re-hide green (new user) comments' : 'Show green (new user) comments';
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (slot.dataset.busy === '1') return;
+      slot.dataset.busy = '1';
+      try {
+        onToggle(!isShowing);
       } finally {
         slot.dataset.busy = '0';
       }
@@ -347,6 +404,14 @@
         } else {
           hideThreadFromIndex(i, index);
         }
+      }
+    }
+  }
+
+  function applyGreenHiding(index) {
+    for (let i = 0; i < index.length; i++) {
+      if (index[i].isGreen && !index[i].row.classList.contains('overmod-hidden') && !index[i].row.classList.contains('overmod-collapsed')) {
+        hideThreadFromIndex(i, index);
       }
     }
   }
@@ -663,6 +728,9 @@
     let blockedPersistent = new Set(((state?.blocked?.combinedWithoutTransient) || (state?.blocked?.combined) || []).map((s) => String(s).toLowerCase()));
     // Transient unblock is always off on page load (per-page-view, not persisted)
     let transientActive = false;
+    let hideGreen = !!state?.hideGreenComments;
+    let greenShowing = false;
+    const greenCount = index.filter(it => it.isGreen).length;
     const updateBlockedSetsFromState = (st) => {
       blockedAll = new Set(((st?.blocked?.combined) || []).map((s) => String(s).toLowerCase()));
       const withoutTransient = (st?.blocked?.combinedWithoutTransient) || null;
@@ -680,6 +748,9 @@
         }
       }
       applyBlocking(index, effectiveSet);
+      if (hideGreen && !greenShowing) {
+        applyGreenHiding(index);
+      }
       reorderBlockedRoots(index);
       renderRemovedBanner(index, effectiveSet);
     };
@@ -688,6 +759,11 @@
       transientActive = enabled;
       applyCurrentBlocking();
       renderTransientToggle({ ...state, transientUnblockActive: enabled }, handleTransientToggle, index);
+    };
+    const handleGreenToggle = (enabled) => {
+      greenShowing = enabled;
+      applyCurrentBlocking();
+      renderGreenToggle(greenCount, greenShowing, handleGreenToggle);
     };
 
     // Load highlights
@@ -703,6 +779,9 @@
     applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleMap);
     // No injected per-comment actions
     renderTransientToggle({ ...state, transientUnblockActive: transientActive }, handleTransientToggle, index);
+    if (hideGreen && greenCount > 0) {
+      renderGreenToggle(greenCount, greenShowing, handleGreenToggle);
+    }
 
     // React to storage updates (e.g., sync completes or user changes settings)
     chrome.storage.onChanged.addListener(async (changes, area) => {
@@ -714,6 +793,7 @@
         state = changes.overmod.newValue || state;
         userStyleMap = buildHighlightStyleMap(state || {});
         updateBlockedSetsFromState(state);
+        hideGreen = !!state?.hideGreenComments;
       }
       if (needReblock || changes.overmod) {
         const st = changes.overmod ? changes.overmod.newValue : null;
@@ -724,6 +804,12 @@
         // Don't change transientActive from storage - it's per-page-view only
         applyCurrentBlocking();
         renderTransientToggle({ ...(changes.overmod.newValue || state), transientUnblockActive: transientActive }, handleTransientToggle, index);
+        if (hideGreen && greenCount > 0) {
+          renderGreenToggle(greenCount, greenShowing, handleGreenToggle);
+        } else {
+          const existingGreen = document.getElementById('overmod-green-toggle');
+          if (existingGreen) existingGreen.remove();
+        }
         const hlUsers = new Set(((st?.highlightedUsers) || (state?.highlightedUsers) || []).map(s => String(s).toLowerCase()));
         // type tagging required for IntelliJ to not complain
         /** @type {Record<string, boolean>} */

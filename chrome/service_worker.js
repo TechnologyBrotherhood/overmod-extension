@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS = {
   localBlockedUsers: [], // local-only blocked usernames
   highlightedUsers: [], // local-only highlighted usernames
   hideMode: "remove", // or "collapse" in future
+  hideGreenComments: false, // when true, comments by new (green) HN users are auto-hidden
   transientUnblockActive: false, // when true, transient lists are temporarily ignored
   // Lists we can write to: [{ label?: string, publicKey: string, privateKey: string }]
   writableLists: [],
