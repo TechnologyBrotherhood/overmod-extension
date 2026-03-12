@@ -18,8 +18,6 @@
     .overmod-inline-action { color: #828282; margin-left: 6px; font-size: 12px; }
     .overmod-inline-action a { color: #828282; text-decoration: none; }
     .overmod-inline-action a:hover { text-decoration: underline; }
-    tr.overmod-collapsed td.default { color: #828282; font-style: italic; }
-    .overmod-collapsed-label { color: #828282; }
     #overmod-transient-toggle { font-size: inherit; color: #828282; }
     #overmod-transient-toggle a { color: inherit; text-decoration: none; }
     #overmod-transient-toggle a:hover { text-decoration: underline; }
@@ -163,60 +161,9 @@
     }
   }
 
-  function restoreCollapsed(row) {
-    if (!row) return;
-    const td = row.querySelector('td.default');
-    if (td && td.dataset && td.dataset.overmodOriginal) {
-      td.innerHTML = td.dataset.overmodOriginal;
-      delete td.dataset.overmodOriginal;
-    }
-    row.classList.remove('overmod-collapsed');
-  }
-
-  function collapseRootThreadFromIndex(idx, index) {
-    const start = index[idx];
-    if (!start) return;
-    const baseIndent = start.indent;
-    // Modify the start row to show a simple placeholder and hide descendants
-    const td = start.row.querySelector('td.default');
-    if (td && !td.dataset.overmodOriginal) {
-      td.dataset.overmodOriginal = td.innerHTML;
-      const span = document.createElement('span');
-      span.className = 'overmod-collapsed-label';
-      span.textContent = 'blocked';
-      td.innerHTML = '';
-      td.appendChild(span);
-      start.row.classList.add('overmod-collapsed');
-    } else {
-      start.row.classList.add('overmod-collapsed');
-    }
-    for (let i = idx + 1; i < index.length; i++) {
-      const curr = index[i];
-      if (curr.indent > baseIndent) {
-        curr.row.classList.add('overmod-hidden');
-      } else {
-        break;
-      }
-    }
-  }
-
   function clearEffects(index) {
     for (const item of index) {
       item.row.classList.remove('overmod-hidden');
-      restoreCollapsed(item.row);
-    }
-  }
-
-  function reorderBlockedRoots(index) {
-    // Move collapsed root rows (indent 0) to the end of the comments table
-    if (!index || !index.length) return;
-    const parent = index[0].row && index[0].row.parentElement ? index[0].row.parentElement : null;
-    if (!parent) return;
-    for (let i = 0; i < index.length; i++) {
-      const it = index[i];
-      if (it.indent === 0 && it.row.classList.contains('overmod-collapsed')) {
-        parent.appendChild(it.row);
-      }
     }
   }
 
@@ -298,10 +245,18 @@
   function countCommentsByAuthors(index, authorSet) {
     if (!authorSet || authorSet.size === 0) return 0;
     let count = 0;
-    for (const item of index) {
+    let hideBelow = -1; // indent threshold for current hidden subtree
+    for (let i = 0; i < index.length; i++) {
+      const item = index[i];
+      if (hideBelow >= 0 && item.indent > hideBelow) {
+        count++;
+        continue;
+      }
+      hideBelow = -1;
       const author = item.author?.toLowerCase?.() || '';
       if (author && authorSet.has(author)) {
         count++;
+        hideBelow = item.indent;
       }
     }
     return count;
@@ -399,18 +354,14 @@
     for (let i = 0; i < index.length; i++) {
       const name = index[i].author?.toLowerCase?.() || '';
       if (name && blockedSet.has(name)) {
-        if (index[i].indent === 0) {
-          collapseRootThreadFromIndex(i, index);
-        } else {
-          hideThreadFromIndex(i, index);
-        }
+        hideThreadFromIndex(i, index);
       }
     }
   }
 
   function applyGreenHiding(index) {
     for (let i = 0; i < index.length; i++) {
-      if (index[i].isGreen && !index[i].row.classList.contains('overmod-hidden') && !index[i].row.classList.contains('overmod-collapsed')) {
+      if (index[i].isGreen && !index[i].row.classList.contains('overmod-hidden')) {
         hideThreadFromIndex(i, index);
       }
     }
@@ -421,11 +372,7 @@
     if (existing) existing.remove();
     if (!blockedSet || blockedSet.size === 0 || !index.length) return;
 
-    let count = 0;
-    for (const item of index) {
-      const name = item.author?.toLowerCase?.() || '';
-      if (name && blockedSet.has(name)) count++;
-    }
+    const count = countCommentsByAuthors(index, blockedSet);
     if (count === 0) return;
 
     const firstRow = index[0].row;
@@ -751,7 +698,6 @@
       if (hideGreen && !greenShowing) {
         applyGreenHiding(index);
       }
-      reorderBlockedRoots(index);
       renderRemovedBanner(index, effectiveSet);
     };
     const handleTransientToggle = async (enabled) => {
