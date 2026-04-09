@@ -8,8 +8,9 @@ function toLowerSet(arr) {
 
 function updateBlockedSets(ctx) {
   const st = ctx.state;
-  ctx.blockedAll = toLowerSet(st?.blocked?.combined);
-  ctx.blockedPersistent = toLowerSet(st?.blocked?.combinedWithoutTransient || st?.blocked?.combined);
+  const patterns = st?.blocked?.localPatterns || [];
+  ctx.blockedAll = createMatchSet(st?.blocked?.combined, patterns);
+  ctx.blockedPersistent = createMatchSet(st?.blocked?.combinedWithoutTransient || st?.blocked?.combined, patterns);
 }
 
 function applyCurrentBlocking(ctx, index) {
@@ -17,8 +18,11 @@ function applyCurrentBlocking(ctx, index) {
   let effectiveSet = activeSet;
   const pageUser = isThreadsPage() && getUserPageUsername().toLowerCase();
   if (pageUser && activeSet.has(pageUser)) {
-    effectiveSet = new Set(activeSet);
-    effectiveSet.delete(pageUser);
+    // Wrap the active set to exclude the page owner on their threads page
+    effectiveSet = {
+      get size() { return Math.max(0, activeSet.size - 1); },
+      has(name) { return name !== pageUser && activeSet.has(name); }
+    };
   }
   applyBlocking(index, effectiveSet);
   if (!ctx.greenShowing) applyGreenHiding(index);
@@ -97,11 +101,12 @@ async function main() {
     state = { ...local.overmod };
   }
 
+  const patterns = state?.blocked?.localPatterns || [];
   const ctx = {
     state,
     userStyleMap: buildHighlightStyleMap(state),
-    blockedAll: toLowerSet(state?.blocked?.combined),
-    blockedPersistent: toLowerSet(state?.blocked?.combinedWithoutTransient || state?.blocked?.combined),
+    blockedAll: createMatchSet(state?.blocked?.combined, patterns),
+    blockedPersistent: createMatchSet(state?.blocked?.combinedWithoutTransient || state?.blocked?.combined, patterns),
     transientActive: false,
     greenShowing: !state?.hideGreenComments,
   };

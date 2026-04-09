@@ -62,6 +62,13 @@ function toNameSet(arr) {
   return s;
 }
 
+// Detect whether a local block list entry is a regex pattern.
+// HN usernames only contain letters, digits, hyphens, and underscores,
+// so any regex metacharacter means the entry is a pattern.
+function isRegexPattern(str) {
+  return /[.*+?^${}()|[\]\\]/.test(str);
+}
+
 async function getState() {
   const { overmod } = await chrome.storage.local.get("overmod");
   return overmod ? overmod : structuredClone(DEFAULT_SETTINGS);
@@ -278,8 +285,20 @@ async function syncBlocklists() {
     decision.set(n, 'highlight');
     decisionPersistent.set(n, 'highlight');
   }
+  // Split local blocked users into plain names and regex patterns
+  const localBlockedPlain = [];
+  const localBlockedPatterns = [];
+  for (const raw of state.localBlockedUsers || []) {
+    const v = String(raw || '').trim();
+    if (!v) continue;
+    if (isRegexPattern(v)) {
+      localBlockedPatterns.push(v);
+    } else {
+      localBlockedPlain.push(v);
+    }
+  }
   // Local blocks next if not already decided
-  for (const n of toNameSet(state.localBlockedUsers)) {
+  for (const n of toNameSet(localBlockedPlain)) {
     if (!decision.has(n)) decision.set(n, 'block');
     if (!decisionPersistent.has(n)) decisionPersistent.set(n, 'block');
   }
@@ -324,6 +343,7 @@ async function syncBlocklists() {
       combined: Array.from(mergedBlocked),
       combinedWithoutTransient: Array.from(mergedBlockedPersistent),
       transientOnly,
+      localPatterns: localBlockedPatterns,
       sourceLists,
       lastSync: Date.now()
     },

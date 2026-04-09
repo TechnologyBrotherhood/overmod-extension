@@ -29,6 +29,25 @@ function injectStyle() {
 
 function $all(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
 
+// Build a Set-like object that matches both exact names and regex patterns.
+// Used for local block list regex support.
+function createMatchSet(names, patterns) {
+  const set = new Set((names || []).map(s => String(s).toLowerCase()));
+  const regexes = [];
+  for (const p of patterns || []) {
+    try { regexes.push(new RegExp('^' + p + '$', 'i')); } catch (_) {}
+  }
+  if (!regexes.length) return set;
+  return {
+    get size() { return set.size + regexes.length; },
+    has(name) {
+      if (set.has(name)) return true;
+      for (const re of regexes) if (re.test(name)) return true;
+      return false;
+    }
+  };
+}
+
 function createOptionsLink(anchorEl) {
   const msg = document.createElement('span');
   msg.className = 'overmod-inline-action';
@@ -248,7 +267,8 @@ function getHeaderCounts(state, index) {
   const transientOnly = Array.isArray(state?.blocked?.transientOnly) ? state.blocked.transientOnly : [];
   const transientOnlySet = new Set(transientOnly.map(s => String(s).toLowerCase()));
   const persistentBlocked = Array.isArray(state?.blocked?.combinedWithoutTransient) ? state.blocked.combinedWithoutTransient : [];
-  const persistentBlockedSet = new Set(persistentBlocked.map(s => String(s).toLowerCase()));
+  const patterns = state?.blocked?.localPatterns || [];
+  const persistentBlockedSet = createMatchSet(persistentBlocked, patterns);
   return {
     blockedCount: countCommentsByAuthors(index, persistentBlockedSet),
     hiddenCount: countCommentsByAuthors(index, transientOnlySet),
