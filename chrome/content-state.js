@@ -6,11 +6,19 @@ function toLowerSet(arr) {
   return new Set((arr || []).map(s => String(s).toLowerCase()));
 }
 
-function updateBlockedSets(ctx) {
+function updateBlockedSets(ctx, index) {
   const st = ctx.state;
   const patterns = st?.blocked?.localPatterns || [];
   ctx.blockedAll = createMatchSet(st?.blocked?.combined, patterns, ctx.authors);
   ctx.blockedPersistent = createMatchSet(st?.blocked?.combinedWithoutTransient || st?.blocked?.combined, patterns, ctx.authors);
+  // Header counts depend only on state and the (static) page index, so
+  // compute them here once per state change rather than on every header
+  // render (toggles rerender the header without changing the counts).
+  ctx.headerCounts = {
+    blockedCount: countCommentsByAuthors(index, ctx.blockedPersistent),
+    hiddenCount: countCommentsByAuthors(index, toLowerSet(st?.blocked?.transientOnly)),
+    greenCount: ctx.greenCount,
+  };
 }
 
 function applyCurrentBlocking(ctx, index) {
@@ -27,9 +35,8 @@ function applyCurrentBlocking(ctx, index) {
 }
 
 function rerenderHeader(ctx, index) {
-  const counts = getHeaderCounts(ctx.state, index);
   renderHeader(
-    counts,
+    ctx.headerCounts,
     (enabled) => handleTransientToggle(ctx, index, enabled),
     ctx.transientActive,
     (enabled) => handleGreenToggle(ctx, index, enabled),
@@ -64,7 +71,7 @@ async function handleStorageChanged(ctx, index, changes, area) {
     ctx.state = changes.overmod.newValue || ctx.state;
     ctx.userStyleMap = buildHighlightStyleMap(ctx.state);
     ctx.greenShowing = !ctx.state?.hideGreenComments;
-    updateBlockedSets(ctx);
+    updateBlockedSets(ctx, index);
     applyCurrentBlocking(ctx, index);
     rerenderHeader(ctx, index);
     const map = changes.overmodHighlighted
@@ -101,13 +108,14 @@ async function main() {
   const ctx = {
     state,
     authors: distinctAuthors(index),
+    greenCount: index.reduce((n, it) => n + (it.isGreen ? 1 : 0), 0),
     userStyleMap: buildHighlightStyleMap(state),
     blockedAll: null,
     blockedPersistent: null,
     transientActive: false,
     greenShowing: !state?.hideGreenComments,
   };
-  updateBlockedSets(ctx);
+  updateBlockedSets(ctx, index);
 
   const { highlighted } = await getLocalState();
   const hl = getHighlightSets(state, highlighted);

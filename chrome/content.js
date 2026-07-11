@@ -248,19 +248,6 @@ function countCommentsByAuthors(index, authorSet) {
   return count;
 }
 
-function getHeaderCounts(state, index) {
-  const transientOnly = Array.isArray(state?.blocked?.transientOnly) ? state.blocked.transientOnly : [];
-  const transientOnlySet = new Set(transientOnly.map(s => String(s).toLowerCase()));
-  const persistentBlocked = Array.isArray(state?.blocked?.combinedWithoutTransient) ? state.blocked.combinedWithoutTransient : [];
-  const patterns = state?.blocked?.localPatterns || [];
-  const persistentBlockedSet = createMatchSet(persistentBlocked, patterns, distinctAuthors(index));
-  return {
-    blockedCount: countCommentsByAuthors(index, persistentBlockedSet),
-    hiddenCount: countCommentsByAuthors(index, transientOnlySet),
-    greenCount: index.filter(it => it.isGreen).length,
-  };
-}
-
 function renderHeader(counts, onTransientToggle, transientActive, onGreenToggle, greenShowing) {
   const commentsLink = getCommentsLink();
   if (!commentsLink) return;
