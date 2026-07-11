@@ -29,23 +29,34 @@ function injectStyle() {
 
 function $all(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
 
-// Build a Set-like object that matches both exact names and regex patterns.
-// Used for local block list regex support.
-function createMatchSet(names, patterns) {
-  const set = new Set((names || []).map(s => String(s).toLowerCase()));
+function compilePatterns(patterns) {
   const regexes = [];
   for (const p of patterns || []) {
     try { regexes.push(new RegExp('^' + p + '$', 'i')); } catch (_) {}
   }
-  if (!regexes.length) return set;
-  return {
-    get size() { return set.size + regexes.length; },
-    has(name) {
-      if (set.has(name)) return true;
-      for (const re of regexes) if (re.test(name)) return true;
-      return false;
+  return regexes;
+}
+
+// Resolve exact names plus regex patterns into a plain Set of lowercased
+// usernames. Patterns are matched once against the page's distinct authors,
+// so every later lookup is a plain Set hit instead of a per-row regex scan.
+function createMatchSet(names, patterns, authors) {
+  const set = new Set((names || []).map(s => String(s).toLowerCase()));
+  const regexes = compilePatterns(patterns);
+  if (regexes.length && authors) {
+    for (const author of authors) {
+      if (!set.has(author) && regexes.some((re) => re.test(author))) set.add(author);
     }
-  };
+  }
+  return set;
+}
+
+function distinctAuthors(index) {
+  const authors = new Set();
+  for (const item of index) {
+    if (item.authorLower) authors.add(item.authorLower);
+  }
+  return authors;
 }
 
 function createOptionsLink(anchorEl) {
@@ -119,17 +130,11 @@ function getIndentLevel(row) {
   return Math.floor(w / 40);
 }
 
-function getAuthor(row) {
-  const el = row.querySelector('.hnuser');
-  return el ? String(el.textContent || '').trim() : '';
-}
-
 function getCommentId(row) {
   return row.getAttribute('id') || '';
 }
 
-function isGreenComment(row) {
-  const hnuser = row.querySelector('.hnuser');
+function isGreenComment(hnuser) {
   if (!hnuser) return false;
   // HN wraps new-account usernames in <font color="#3c963c"> inside .hnuser
   const font = hnuser.querySelector('font[color]');
@@ -143,37 +148,18 @@ function isGreenComment(row) {
 }
 
 function buildIndex(rows) {
-  return rows.map((row) => ({
-    row,
-    id: getCommentId(row),
-    author: getAuthor(row),
-    indent: getIndentLevel(row),
-    isGreen: isGreenComment(row)
-  }));
-}
-
-function hideThreadFromIndex(idx, index) {
-  const start = index[idx];
-  if (!start) return;
-  const baseIndent = start.indent;
-  for (let i = idx; i < index.length; i++) {
-    if (i === idx) {
-      start.row.classList.add('overmod-hidden');
-      continue;
-    }
-    const curr = index[i];
-    if (curr.indent > baseIndent) {
-      curr.row.classList.add('overmod-hidden');
-    } else {
-      break;
-    }
-  }
-}
-
-function clearEffects(index) {
-  for (const item of index) {
-    item.row.classList.remove('overmod-hidden');
-  }
+  return rows.map((row) => {
+    const hnuser = row.querySelector('.hnuser');
+    const author = hnuser ? String(hnuser.textContent || '').trim() : '';
+    return {
+      row,
+      id: getCommentId(row),
+      author,
+      authorLower: author.toLowerCase(),
+      indent: getIndentLevel(row),
+      isGreen: isGreenComment(hnuser)
+    };
+  });
 }
 
 function setHighlight(row, style) {
@@ -254,8 +240,7 @@ function countCommentsByAuthors(index, authorSet) {
       continue;
     }
     hideBelow = -1;
-    const author = item.author?.toLowerCase?.() || '';
-    if (author && authorSet.has(author)) {
+    if (item.authorLower && authorSet.has(item.authorLower)) {
       count++;
       hideBelow = item.indent;
     }
@@ -268,7 +253,7 @@ function getHeaderCounts(state, index) {
   const transientOnlySet = new Set(transientOnly.map(s => String(s).toLowerCase()));
   const persistentBlocked = Array.isArray(state?.blocked?.combinedWithoutTransient) ? state.blocked.combinedWithoutTransient : [];
   const patterns = state?.blocked?.localPatterns || [];
-  const persistentBlockedSet = createMatchSet(persistentBlocked, patterns);
+  const persistentBlockedSet = createMatchSet(persistentBlocked, patterns, distinctAuthors(index));
   return {
     blockedCount: countCommentsByAuthors(index, persistentBlockedSet),
     hiddenCount: countCommentsByAuthors(index, transientOnlySet),
@@ -308,22 +293,25 @@ function renderHeader(counts, onTransientToggle, transientActive, onGreenToggle,
   addToggle('green (new user)', greenShowing, `${counts.greenCount} green shown`, `${counts.greenCount} green`, onGreenToggle);
 }
 
-function applyBlocking(index, blockedSet) {
-  clearEffects(index);
-  if (!blockedSet || blockedSet.size === 0) return;
-  for (let i = 0; i < index.length; i++) {
-    const name = index[i].author?.toLowerCase?.() || '';
-    if (name && blockedSet.has(name)) {
-      hideThreadFromIndex(i, index);
+// Single pass over the index: a row is hidden when its author is blocked,
+// when it is a green (new user) comment while those are hidden, or when it
+// sits inside the subtree of such a row. classList.toggle with a force
+// argument no-ops when the class already matches, so re-applies only touch
+// rows whose state actually changes.
+function applyBlocking(index, blockedSet, hideGreen) {
+  const hasBlocks = !!(blockedSet && blockedSet.size);
+  let hideBelow = -1;
+  for (const item of index) {
+    let hide = hideBelow >= 0 && item.indent > hideBelow;
+    if (!hide) {
+      hideBelow = -1;
+      if ((hasBlocks && item.authorLower && blockedSet.has(item.authorLower)) ||
+          (hideGreen && item.isGreen)) {
+        hide = true;
+        hideBelow = item.indent;
+      }
     }
-  }
-}
-
-function applyGreenHiding(index) {
-  for (let i = 0; i < index.length; i++) {
-    if (index[i].isGreen && !index[i].row.classList.contains('overmod-hidden')) {
-      hideThreadFromIndex(i, index);
-    }
+    item.row.classList.toggle('overmod-hidden', hide);
   }
 }
 
@@ -376,8 +364,8 @@ function applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleM
   if (highlightedUsers && highlightedUsers.size) {
     for (let i = 0; i < index.length; i++) {
       const it = index[i];
-      if (it.author && highlightedUsers.has(it.author.toLowerCase())) {
-        const style = userStyleMap && userStyleMap.get(it.author.toLowerCase());
+      if (it.authorLower && highlightedUsers.has(it.authorLower)) {
+        const style = userStyleMap && userStyleMap.get(it.authorLower);
         setHighlight(it.row, style || DEFAULT_HIGHLIGHT_STYLE);
       }
     }
@@ -598,5 +586,9 @@ function insertOvermodRow(username) {
   }
 
   try { void maybeAddUnblockRow(); } catch (_) {}
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors };
 }
 

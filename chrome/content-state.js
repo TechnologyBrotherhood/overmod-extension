@@ -9,8 +9,8 @@ function toLowerSet(arr) {
 function updateBlockedSets(ctx) {
   const st = ctx.state;
   const patterns = st?.blocked?.localPatterns || [];
-  ctx.blockedAll = createMatchSet(st?.blocked?.combined, patterns);
-  ctx.blockedPersistent = createMatchSet(st?.blocked?.combinedWithoutTransient || st?.blocked?.combined, patterns);
+  ctx.blockedAll = createMatchSet(st?.blocked?.combined, patterns, ctx.authors);
+  ctx.blockedPersistent = createMatchSet(st?.blocked?.combinedWithoutTransient || st?.blocked?.combined, patterns, ctx.authors);
 }
 
 function applyCurrentBlocking(ctx, index) {
@@ -18,14 +18,11 @@ function applyCurrentBlocking(ctx, index) {
   let effectiveSet = activeSet;
   const pageUser = isThreadsPage() && getUserPageUsername().toLowerCase();
   if (pageUser && activeSet.has(pageUser)) {
-    // Wrap the active set to exclude the page owner on their threads page
-    effectiveSet = {
-      get size() { return Math.max(0, activeSet.size - 1); },
-      has(name) { return name !== pageUser && activeSet.has(name); }
-    };
+    // Exclude the page owner on their own threads page
+    effectiveSet = new Set(activeSet);
+    effectiveSet.delete(pageUser);
   }
-  applyBlocking(index, effectiveSet);
-  if (!ctx.greenShowing) applyGreenHiding(index);
+  applyBlocking(index, effectiveSet, !ctx.greenShowing);
   renderRemovedBanner(index, effectiveSet);
 }
 
@@ -101,15 +98,16 @@ async function main() {
     state = { ...local.overmod };
   }
 
-  const patterns = state?.blocked?.localPatterns || [];
   const ctx = {
     state,
+    authors: distinctAuthors(index),
     userStyleMap: buildHighlightStyleMap(state),
-    blockedAll: createMatchSet(state?.blocked?.combined, patterns),
-    blockedPersistent: createMatchSet(state?.blocked?.combinedWithoutTransient || state?.blocked?.combined, patterns),
+    blockedAll: null,
+    blockedPersistent: null,
     transientActive: false,
     greenShowing: !state?.hideGreenComments,
   };
+  updateBlockedSets(ctx);
 
   const { highlighted } = await getLocalState();
   const hl = getHighlightSets(state, highlighted);
