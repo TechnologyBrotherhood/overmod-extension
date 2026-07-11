@@ -27,3 +27,7 @@ function normalizeHighlightStyle(value) {
   }
   return { bg: '', fg: '' };
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { DEFAULT_HIGHLIGHT_STYLE, normalizeHexColor, normalizeHighlightStyle };
+}

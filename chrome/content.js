@@ -322,39 +322,32 @@ function renderRemovedBanner(index, blockedSet) {
   parent.insertBefore(tr, firstRow);
 }
 
+// Single pass: manual highlighted IDs cover the comment and its whole
+// subtree (indent tracking, like applyBlocking); user-based highlights
+// style only the author's own comments and take precedence over the
+// default manual style. Rows already in the right state aren't touched,
+// so clearing no longer walks every row's .commtext nodes.
 function applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleMap) {
-  for (const item of index) clearHighlight(item.row);
-
-  const idToIdx = new Map();
-  index.forEach((it, i) => idToIdx.set(it.id, i));
-
-  // 1) Manual highlighted IDs
-  if (highlightedIds && highlightedIds.size) {
-    for (const id of highlightedIds) {
-      const startIdx = idToIdx.get(id);
-      if (startIdx == null) continue;
-      const start = index[startIdx];
-      const baseIndent = start.indent;
-      for (let i = startIdx; i < index.length; i++) {
-        const curr = index[i];
-        if (i === startIdx || curr.indent > baseIndent) {
-          setHighlight(curr.row, DEFAULT_HIGHLIGHT_STYLE);
-        } else {
-          break;
-        }
+  const hasIds = !!(highlightedIds && highlightedIds.size);
+  const hasUsers = !!(highlightedUsers && highlightedUsers.size);
+  let hlBelow = -1;
+  for (const item of index) {
+    let inManual = hlBelow >= 0 && item.indent > hlBelow;
+    if (!inManual) {
+      hlBelow = -1;
+      if (hasIds && highlightedIds.has(item.id)) {
+        inManual = true;
+        hlBelow = item.indent;
       }
     }
-  }
-
-  // 2) User-based highlights: highlight only the author's own comments,
-  //    not the entire subtree under each comment.
-  if (highlightedUsers && highlightedUsers.size) {
-    for (let i = 0; i < index.length; i++) {
-      const it = index[i];
-      if (it.authorLower && highlightedUsers.has(it.authorLower)) {
-        const style = userStyleMap && userStyleMap.get(it.authorLower);
-        setHighlight(it.row, style || DEFAULT_HIGHLIGHT_STYLE);
-      }
+    let style = inManual ? DEFAULT_HIGHLIGHT_STYLE : null;
+    if (hasUsers && item.authorLower && highlightedUsers.has(item.authorLower)) {
+      style = (userStyleMap && userStyleMap.get(item.authorLower)) || DEFAULT_HIGHLIGHT_STYLE;
+    }
+    if (style) {
+      setHighlight(item.row, style);
+    } else if (item.row.classList.contains('overmod-highlight')) {
+      clearHighlight(item.row);
     }
   }
 }
@@ -576,6 +569,6 @@ function insertOvermodRow(username) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors };
+  module.exports = { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors, applyBothHighlights };
 }
 

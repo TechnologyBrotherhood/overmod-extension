@@ -2,10 +2,15 @@
 // Run with: node content.test.js
 
 const assert = require('assert');
-const { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors } = require('./content.js');
+const common = require('./common.js');
+// content.js references these as bare globals (shared content-script scope)
+global.DEFAULT_HIGHLIGHT_STYLE = common.DEFAULT_HIGHLIGHT_STYLE;
+global.normalizeHighlightStyle = common.normalizeHighlightStyle;
+const { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors, applyBothHighlights } = require('./content.js');
 
 function fakeRow() {
   const classes = new Set();
+  const cssVars = {};
   return {
     classList: {
       add: (c) => classes.add(c),
@@ -16,7 +21,13 @@ function fakeRow() {
         return on;
       },
       contains: (c) => classes.has(c)
-    }
+    },
+    style: {
+      setProperty: (k, v) => { cssVars[k] = v; },
+      removeProperty: (k) => { delete cssVars[k]; }
+    },
+    querySelectorAll: () => [],
+    cssVars
   };
 }
 
@@ -132,6 +143,36 @@ console.log('Testing countCommentsByAuthors...');
   assert.strictEqual(countCommentsByAuthors(index, new Set(['blocked'])), 3);
   assert.strictEqual(countCommentsByAuthors(index, new Set()), 0);
   assert.strictEqual(countCommentsByAuthors(index, new Set(['nobody'])), 0);
+}
+
+console.log('Testing applyBothHighlights...');
+{
+  const highlighted = (index) => index.map((it) => it.row.classList.contains('overmod-highlight'));
+
+  // Manual ID highlights the comment and its subtree
+  const index = [
+    item('root', 0, { id: 'c1' }),
+    item('child', 1, { id: 'c2' }),
+    item('sibling', 0, { id: 'c3' })
+  ];
+  applyBothHighlights(index, new Set(['c1']), new Set(), new Map());
+  assert.deepStrictEqual(highlighted(index), [true, true, false]);
+
+  // Re-apply with nothing highlighted clears previously highlighted rows
+  applyBothHighlights(index, new Set(), new Set(), new Map());
+  assert.deepStrictEqual(highlighted(index), [false, false, false]);
+
+  // User highlight styles only the author's own rows, with their style
+  const styleMap = new Map([['child', { bg: '#112233', fg: '#445566' }]]);
+  applyBothHighlights(index, new Set(), new Set(['child']), styleMap);
+  assert.deepStrictEqual(highlighted(index), [false, true, false]);
+  assert.strictEqual(index[1].row.cssVars['--overmod-highlight-bg'], '#112233');
+
+  // User style wins over the manual default within a manual subtree
+  applyBothHighlights(index, new Set(['c1']), new Set(['child']), styleMap);
+  assert.deepStrictEqual(highlighted(index), [true, true, false]);
+  assert.strictEqual(index[1].row.cssVars['--overmod-highlight-bg'], '#112233');
+  assert.strictEqual(index[0].row.cssVars['--overmod-highlight-bg'], common.DEFAULT_HIGHLIGHT_STYLE.bg);
 }
 
 console.log('\nAll content.js tests passed.');
