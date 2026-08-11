@@ -146,6 +146,20 @@ async function getFullState() {
   };
 }
 
+// Slim state for comment pages. Drops blocked.sourceLists (a per-list copy
+// of every blocked username), writableLists (which carry private keys the
+// comment page never needs), and localBlockedUsers (already merged into
+// blocked.combined/localPatterns). highlighted.sourceLists stays — the
+// per-list highlight styles are resolved from it.
+function toPageState(full) {
+  return {
+    ...full,
+    writableLists: [],
+    localBlockedUsers: [],
+    blocked: { ...(full.blocked || {}), sourceLists: {} }
+  };
+}
+
 async function ensureDefaults() {
   const current = await getState();
   const sync = await getSyncSettings();
@@ -231,9 +245,12 @@ async function syncBlocklists() {
   const effectiveType = {};
   const labels = { ...(state.subscribedLabels || {}) };
   const transientFlags = state.transientLists || {};
-  for (const pk of lists) {
+  // Fetch all subscribed lists concurrently — each iteration only touches
+  // its own list's keys, and priority ordering is applied afterwards from
+  // the ordered `lists` array, so completion order doesn't matter.
+  await Promise.all(lists.map(async (pk) => {
     const trimmed = String(pk || "").trim();
-    if (!trimmed) continue;
+    if (!trimmed) return;
     try {
       const data = await withRetry(async () => {
         const res = await fetch(`${base}/lists/${encodeURIComponent(trimmed)}`, {
@@ -275,7 +292,7 @@ async function syncBlocklists() {
       // Optionally log network/parse error; state falls back to previous data.
       console.debug("Overmod sync error for", trimmed, err);
     }
-  }
+  }));
 
   // Priority-based classification (first list wins), local overrides win globally
   const decision = new Map(); // all sources applied
@@ -631,10 +648,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || typeof message !== "object") return;
     switch (message.type) {
       case "overmod:getState": {
-        // Opportunistically refresh from the server when state is requested
-        // and the last successful sync is stale.
-        try { await maybeSyncBlocklists(); } catch (_) {}
-        sendResponse(await getFullState());
+        // Opportunistically refresh from the server when the last successful
+        // sync is stale, but never block the response on the network: reply
+        // with cached state immediately and let clients pick up the refreshed
+        // data via their storage.onChanged listener. If the worker is killed
+        // mid-sync, the next getState simply retries.
+        maybeSyncBlocklists().catch(() => {});
+        const full = await getFullState();
+        sendResponse(message.scope === 'page' ? toPageState(full) : full);
         break;
       }
       case "overmod:syncNow": {

@@ -2,23 +2,20 @@
 // Operates on a ctx object that holds mutable page-level state,
 // and an index array of comment rows built by content.js.
 
-function toLowerSet(arr) {
-  return new Set((arr || []).map(s => String(s).toLowerCase()));
-}
-
 function updateBlockedSets(ctx, index) {
   const st = ctx.state;
   const patterns = st?.blocked?.localPatterns || [];
-  ctx.blockedAll = createMatchSet(st?.blocked?.combined, patterns, ctx.authors);
+  const transientOnly = new Set(st?.blocked?.transientOnly || []);
   ctx.blockedPersistent = createMatchSet(st?.blocked?.combinedWithoutTransient || st?.blocked?.combined, patterns, ctx.authors);
+  // combined = combinedWithoutTransient ∪ transientOnly, so extend a copy of
+  // the persistent set instead of walking the full combined list again.
+  ctx.blockedAll = new Set(ctx.blockedPersistent);
+  for (const name of transientOnly) ctx.blockedAll.add(name);
   // Header counts depend only on state and the (static) page index, so
   // compute them here once per state change rather than on every header
   // render (toggles rerender the header without changing the counts).
-  ctx.headerCounts = {
-    blockedCount: countCommentsByAuthors(index, ctx.blockedPersistent),
-    hiddenCount: countCommentsByAuthors(index, toLowerSet(st?.blocked?.transientOnly)),
-    greenCount: ctx.greenCount,
-  };
+  const [blockedCount, hiddenCount] = countCommentsByAuthorSets(index, [ctx.blockedPersistent, transientOnly]);
+  ctx.headerCounts = { blockedCount, hiddenCount, greenCount: ctx.greenCount };
 }
 
 function applyCurrentBlocking(ctx, index) {
@@ -30,8 +27,8 @@ function applyCurrentBlocking(ctx, index) {
     effectiveSet = new Set(activeSet);
     effectiveSet.delete(pageUser);
   }
-  applyBlocking(index, effectiveSet, !ctx.greenShowing);
-  renderRemovedBanner(index, effectiveSet);
+  const blockedCount = applyBlocking(index, effectiveSet, !ctx.greenShowing);
+  renderRemovedBanner(index, blockedCount);
 }
 
 function rerenderHeader(ctx, index) {
@@ -69,6 +66,7 @@ async function handleStorageChanged(ctx, index, changes, area) {
   if (area !== 'local') return;
   if (changes.overmod) {
     ctx.state = changes.overmod.newValue || ctx.state;
+    ctx.stateApplied = true;
     ctx.userStyleMap = buildHighlightStyleMap(ctx.state);
     ctx.greenShowing = !ctx.state?.hideGreenComments;
     updateBlockedSets(ctx, index);
@@ -97,36 +95,44 @@ async function main() {
 
   const rows = getRows();
   if (!rows.length) return;
+
+  // Start the state fetches before indexing the DOM so they overlap; one
+  // local read covers both the fallback state and the highlighted-ID map.
+  const statePromise = Promise.all([getStateFromBackground('page'), getLocalState()]);
   const index = buildIndex(rows);
 
-  let state = await getStateFromBackground();
-  if (!state) {
-    const local = await getLocalState();
-    state = { ...local.overmod };
-  }
-
   const ctx = {
-    state,
+    state: null,
+    stateApplied: false,
     authors: distinctAuthors(index),
     greenCount: index.reduce((n, it) => n + (it.isGreen ? 1 : 0), 0),
-    userStyleMap: buildHighlightStyleMap(state),
+    userStyleMap: new Map(),
     blockedAll: null,
     blockedPersistent: null,
     transientActive: false,
-    greenShowing: !state?.hideGreenComments,
+    greenShowing: true,
   };
-  updateBlockedSets(ctx, index);
 
-  const { highlighted } = await getLocalState();
-  const hl = getHighlightSets(state, highlighted);
-
-  applyCurrentBlocking(ctx, index);
-  applyBothHighlights(index, hl.ids, hl.users, ctx.userStyleMap);
-  rerenderHeader(ctx, index);
-
+  // Listen before awaiting the state: getState kicks off a background
+  // blocklist sync in the worker, and its storage write can land before the
+  // (cached, possibly stale) response does. Registering the listener after
+  // the await would miss that write and leave the page on stale state.
   if (main._storageListener) chrome.storage.onChanged.removeListener(main._storageListener);
   main._storageListener = (changes, area) => handleStorageChanged(ctx, index, changes, area);
   chrome.storage.onChanged.addListener(main._storageListener);
+
+  const [bgState, local] = await statePromise;
+  if (ctx.stateApplied) return; // a fresher sync already rendered the page
+
+  ctx.state = bgState || { ...local.overmod };
+  ctx.userStyleMap = buildHighlightStyleMap(ctx.state);
+  ctx.greenShowing = !ctx.state?.hideGreenComments;
+  updateBlockedSets(ctx, index);
+
+  const hl = getHighlightSets(ctx.state, local.highlighted);
+  applyCurrentBlocking(ctx, index);
+  applyBothHighlights(index, hl.ids, hl.users, ctx.userStyleMap);
+  rerenderHeader(ctx, index);
 }
 
 if (document.readyState === 'loading') {

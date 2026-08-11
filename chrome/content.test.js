@@ -6,7 +6,7 @@ const common = require('./common.js');
 // content.js references these as bare globals (shared content-script scope)
 global.DEFAULT_HIGHLIGHT_STYLE = common.DEFAULT_HIGHLIGHT_STYLE;
 global.normalizeHighlightStyle = common.normalizeHighlightStyle;
-const { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors, applyBothHighlights } = require('./content.js');
+const { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors, countCommentsByAuthorSets, applyBothHighlights } = require('./content.js');
 
 function fakeRow() {
   const classes = new Set();
@@ -48,7 +48,8 @@ function hiddenFlags(index) {
 
 console.log('Testing createMatchSet...');
 {
-  const set = createMatchSet(['Alice', 'BOB'], [], new Set());
+  // Names arrive pre-lowercased from the service worker's merged lists
+  const set = createMatchSet(['alice', 'bob'], [], new Set());
   assert.strictEqual(set.has('alice'), true);
   assert.strictEqual(set.has('bob'), true);
   assert.strictEqual(set.has('carol'), false);
@@ -85,8 +86,9 @@ console.log('Testing applyBlocking hides blocked author and subtree...');
     item('grandchild', 3),
     item('sibling', 1)
   ];
-  applyBlocking(index, new Set(['blocked']), false);
+  const count = applyBlocking(index, new Set(['blocked']), false);
   assert.deepStrictEqual(hiddenFlags(index), [false, true, true, true, false]);
+  assert.strictEqual(count, 3);
 }
 
 console.log('Testing applyBlocking with nested blocked authors...');
@@ -118,7 +120,8 @@ console.log('Testing applyBlocking green hiding...');
     item('reply', 2),
     item('b', 1)
   ];
-  applyBlocking(index, new Set(), true);
+  // Green-only hiding doesn't count toward the removed (blocked) banner
+  assert.strictEqual(applyBlocking(index, new Set(), true), 0);
   assert.deepStrictEqual(hiddenFlags(index), [false, true, true, false]);
 
   // Green showing again: everything unhidden
@@ -127,8 +130,17 @@ console.log('Testing applyBlocking green hiding...');
 
   // Green row inside a blocked subtree stays hidden with the subtree,
   // and so does everything else under the blocked root
-  applyBlocking(index, new Set(['a']), true);
+  assert.strictEqual(applyBlocking(index, new Set(['a']), true), 4);
   assert.deepStrictEqual(hiddenFlags(index), [true, true, true, true]);
+
+  // Blocked author beneath a green-hidden root still counts as blocked
+  const nested = [
+    item('newbie', 0, { green: true }),
+    item('blocked', 1),
+    item('after', 0)
+  ];
+  assert.strictEqual(applyBlocking(nested, new Set(['blocked']), true), 1);
+  assert.deepStrictEqual(hiddenFlags(nested), [true, true, false]);
 }
 
 console.log('Testing countCommentsByAuthors...');
@@ -143,6 +155,13 @@ console.log('Testing countCommentsByAuthors...');
   assert.strictEqual(countCommentsByAuthors(index, new Set(['blocked'])), 3);
   assert.strictEqual(countCommentsByAuthors(index, new Set()), 0);
   assert.strictEqual(countCommentsByAuthors(index, new Set(['nobody'])), 0);
+
+  // Multi-set variant counts each set independently in one pass
+  // ('root' at indent 0 owns the next three rows as its subtree)
+  assert.deepStrictEqual(
+    countCommentsByAuthorSets(index, [new Set(['blocked']), new Set(['root']), new Set()]),
+    [3, 4, 0]
+  );
 }
 
 console.log('Testing applyBothHighlights...');

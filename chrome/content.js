@@ -37,11 +37,13 @@ function compilePatterns(patterns) {
   return regexes;
 }
 
-// Resolve exact names plus regex patterns into a plain Set of lowercased
-// usernames. Patterns are matched once against the page's distinct authors,
-// so every later lookup is a plain Set hit instead of a per-row regex scan.
+// Resolve exact names plus regex patterns into a plain Set of usernames.
+// `names` must already be lowercased — the service worker normalizes all
+// merged lists at sync time, so re-lowercasing here would be wasted work.
+// Patterns are matched once against the page's distinct authors, so every
+// later lookup is a plain Set hit instead of a per-row regex scan.
 function createMatchSet(names, patterns, authors) {
-  const set = new Set((names || []).map(s => String(s).toLowerCase()));
+  const set = new Set(names || []);
   const regexes = compilePatterns(patterns);
   if (regexes.length && authors) {
     for (const author of authors) {
@@ -229,23 +231,32 @@ function getCommentsLink() {
   return null;
 }
 
-function countCommentsByAuthors(index, authorSet) {
-  if (!authorSet || authorSet.size === 0) return 0;
-  let count = 0;
-  let hideBelow = -1;
-  for (let i = 0; i < index.length; i++) {
-    const item = index[i];
-    if (hideBelow >= 0 && item.indent > hideBelow) {
-      count++;
-      continue;
-    }
-    hideBelow = -1;
-    if (item.authorLower && authorSet.has(item.authorLower)) {
-      count++;
-      hideBelow = item.indent;
+// Count comments (plus their subtrees) authored by each set's members, for
+// several sets in one pass over the index. Each set gets its own subtree
+// tracker, so the result matches running the count separately per set.
+function countCommentsByAuthorSets(index, authorSets) {
+  const counts = authorSets.map(() => 0);
+  const below = authorSets.map(() => -1);
+  for (const item of index) {
+    for (let s = 0; s < authorSets.length; s++) {
+      const set = authorSets[s];
+      if (!set || set.size === 0) continue;
+      if (below[s] >= 0 && item.indent > below[s]) {
+        counts[s]++;
+        continue;
+      }
+      below[s] = -1;
+      if (item.authorLower && set.has(item.authorLower)) {
+        counts[s]++;
+        below[s] = item.indent;
+      }
     }
   }
-  return count;
+  return counts;
+}
+
+function countCommentsByAuthors(index, authorSet) {
+  return countCommentsByAuthorSets(index, [authorSet])[0];
 }
 
 function renderHeader(counts, onTransientToggle, transientActive, onGreenToggle, greenShowing) {
@@ -285,30 +296,41 @@ function renderHeader(counts, onTransientToggle, transientActive, onGreenToggle,
 // sits inside the subtree of such a row. classList.toggle with a force
 // argument no-ops when the class already matches, so re-applies only touch
 // rows whose state actually changes.
+// Returns the number of comments hidden because of a blocked author (their
+// subtrees included, green-only hiding excluded) — the removed-banner count,
+// tracked here so the banner doesn't need its own pass over the index.
 function applyBlocking(index, blockedSet, hideGreen) {
   const hasBlocks = !!(blockedSet && blockedSet.size);
   let hideBelow = -1;
+  let blockBelow = -1;
+  let blockedCount = 0;
   for (const item of index) {
+    let blocked = blockBelow >= 0 && item.indent > blockBelow;
+    if (!blocked) {
+      blockBelow = -1;
+      if (hasBlocks && item.authorLower && blockedSet.has(item.authorLower)) {
+        blocked = true;
+        blockBelow = item.indent;
+      }
+    }
+    if (blocked) blockedCount++;
     let hide = hideBelow >= 0 && item.indent > hideBelow;
     if (!hide) {
       hideBelow = -1;
-      if ((hasBlocks && item.authorLower && blockedSet.has(item.authorLower)) ||
-          (hideGreen && item.isGreen)) {
+      if (blocked || (hideGreen && item.isGreen)) {
         hide = true;
         hideBelow = item.indent;
       }
     }
     item.row.classList.toggle('overmod-hidden', hide);
   }
+  return blockedCount;
 }
 
-function renderRemovedBanner(index, blockedSet) {
+function renderRemovedBanner(index, count) {
   const existing = document.getElementById('overmod-removed-banner');
   if (existing) existing.remove();
-  if (!blockedSet || blockedSet.size === 0 || !index.length) return;
-
-  const count = countCommentsByAuthors(index, blockedSet);
-  if (count === 0) return;
+  if (!count || !index.length) return;
 
   const firstRow = index[0].row;
   const parent = firstRow.parentNode;
@@ -352,9 +374,12 @@ function applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleM
   }
 }
 
-async function getStateFromBackground() {
+// scope 'page' asks the background for the slim comment-page state (no
+// per-list blocked copies, no writable-list credentials); omit it for the
+// full state the user-page choosers need.
+async function getStateFromBackground(scope) {
   try {
-    return await chrome.runtime.sendMessage({ type: 'overmod:getState' });
+    return await chrome.runtime.sendMessage({ type: 'overmod:getState', scope });
   } catch (_) {
     return null;
   }
@@ -569,6 +594,6 @@ function insertOvermodRow(username) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors, applyBothHighlights };
+  module.exports = { compilePatterns, createMatchSet, distinctAuthors, applyBlocking, countCommentsByAuthors, countCommentsByAuthorSets, applyBothHighlights };
 }
 
