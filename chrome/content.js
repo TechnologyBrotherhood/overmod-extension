@@ -231,25 +231,32 @@ function getCommentsLink() {
   return null;
 }
 
+// Tracks membership in "root row plus everything indented under it" while
+// scanning the index in order: call once per row with whether the row is
+// itself a root, get back whether the row is a root or inside one. This is
+// the one place the subtree-boundary rule lives — blocking, green-hiding,
+// counting, and manual highlights all share it, so a fix to the rule can't
+// land in one walk and miss the others.
+function subtreeTracker() {
+  let below = -1;
+  return (item, isRoot) => {
+    if (below >= 0 && item.indent > below) return true;
+    below = isRoot ? item.indent : -1;
+    return !!isRoot;
+  };
+}
+
 // Count comments (plus their subtrees) authored by each set's members, for
 // several sets in one pass over the index. Each set gets its own subtree
 // tracker, so the result matches running the count separately per set.
 function countCommentsByAuthorSets(index, authorSets) {
   const counts = authorSets.map(() => 0);
-  const below = authorSets.map(() => -1);
+  const trackers = authorSets.map(() => subtreeTracker());
   for (const item of index) {
     for (let s = 0; s < authorSets.length; s++) {
       const set = authorSets[s];
       if (!set || set.size === 0) continue;
-      if (below[s] >= 0 && item.indent > below[s]) {
-        counts[s]++;
-        continue;
-      }
-      below[s] = -1;
-      if (item.authorLower && set.has(item.authorLower)) {
-        counts[s]++;
-        below[s] = item.indent;
-      }
+      if (trackers[s](item, !!item.authorLower && set.has(item.authorLower))) counts[s]++;
     }
   }
   return counts;
@@ -301,27 +308,13 @@ function renderHeader(counts, onTransientToggle, transientActive, onGreenToggle,
 // tracked here so the banner doesn't need its own pass over the index.
 function applyBlocking(index, blockedSet, hideGreen) {
   const hasBlocks = !!(blockedSet && blockedSet.size);
-  let hideBelow = -1;
-  let blockBelow = -1;
+  const inBlocked = subtreeTracker();
+  const inHidden = subtreeTracker();
   let blockedCount = 0;
   for (const item of index) {
-    let blocked = blockBelow >= 0 && item.indent > blockBelow;
-    if (!blocked) {
-      blockBelow = -1;
-      if (hasBlocks && item.authorLower && blockedSet.has(item.authorLower)) {
-        blocked = true;
-        blockBelow = item.indent;
-      }
-    }
+    const blocked = inBlocked(item, hasBlocks && !!item.authorLower && blockedSet.has(item.authorLower));
     if (blocked) blockedCount++;
-    let hide = hideBelow >= 0 && item.indent > hideBelow;
-    if (!hide) {
-      hideBelow = -1;
-      if (blocked || (hideGreen && item.isGreen)) {
-        hide = true;
-        hideBelow = item.indent;
-      }
-    }
+    const hide = inHidden(item, blocked || (hideGreen && item.isGreen));
     item.row.classList.toggle('overmod-hidden', hide);
   }
   return blockedCount;
@@ -352,16 +345,9 @@ function renderRemovedBanner(index, count) {
 function applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleMap) {
   const hasIds = !!(highlightedIds && highlightedIds.size);
   const hasUsers = !!(highlightedUsers && highlightedUsers.size);
-  let hlBelow = -1;
+  const inManualTree = subtreeTracker();
   for (const item of index) {
-    let inManual = hlBelow >= 0 && item.indent > hlBelow;
-    if (!inManual) {
-      hlBelow = -1;
-      if (hasIds && highlightedIds.has(item.id)) {
-        inManual = true;
-        hlBelow = item.indent;
-      }
-    }
+    const inManual = inManualTree(item, hasIds && highlightedIds.has(item.id));
     let style = inManual ? DEFAULT_HIGHLIGHT_STYLE : null;
     if (hasUsers && item.authorLower && highlightedUsers.has(item.authorLower)) {
       style = (userStyleMap && userStyleMap.get(item.authorLower)) || DEFAULT_HIGHLIGHT_STYLE;
@@ -375,8 +361,10 @@ function applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleM
 }
 
 // scope 'page' asks the background for the slim comment-page state (no
-// per-list blocked copies, no writable-list credentials); omit it for the
-// full state the user-page choosers need.
+// per-list blocked copies, no writable-list credentials), served from cache
+// without waiting on a refresh. Omit it for the full state the user-page
+// choosers need — the worker then waits out its staleness check first, so
+// these one-shot reads act on current lists.
 async function getStateFromBackground(scope) {
   try {
     return await chrome.runtime.sendMessage({ type: 'overmod:getState', scope });

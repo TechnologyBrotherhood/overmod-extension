@@ -1,5 +1,7 @@
 // Overmod Chrome Extension - Background Service Worker (MV3)
 
+importScripts('common.js'); // shared helpers, incl. the toPageState projection
+
 const DEFAULT_SETTINGS = {
   apiBaseUrl: "https://api.overmod.org", // configurable in options
   subscribedLists: [], // array of publicKey strings
@@ -46,7 +48,9 @@ async function withRetry(fn, options) {
       lastError = err;
       if (attempt === retries) break;
       if (delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        // Jittered so parallel list fetches that fail together don't retry
+        // in lockstep against the same rate limiter.
+        await new Promise((resolve) => setTimeout(resolve, delayMs * (1 + Math.random())));
       }
     }
   }
@@ -146,20 +150,6 @@ async function getFullState() {
   };
 }
 
-// Slim state for comment pages. Drops blocked.sourceLists (a per-list copy
-// of every blocked username), writableLists (which carry private keys the
-// comment page never needs), and localBlockedUsers (already merged into
-// blocked.combined/localPatterns). highlighted.sourceLists stays — the
-// per-list highlight styles are resolved from it.
-function toPageState(full) {
-  return {
-    ...full,
-    writableLists: [],
-    localBlockedUsers: [],
-    blocked: { ...(full.blocked || {}), sourceLists: {} }
-  };
-}
-
 async function ensureDefaults() {
   const current = await getState();
   const sync = await getSyncSettings();
@@ -234,7 +224,23 @@ async function ensureDefaults() {
   return merged;
 }
 
-async function syncBlocklists() {
+// All sync writes are serialized through this chain so an older in-flight
+// sync can never finish after — and clobber — the state written by a newer
+// one (e.g. a block added between a page load's staleness sync and its
+// completion). Each queued run snapshots state when it starts, not when it
+// was requested, so a post-write sync always sees the write.
+let syncChain = Promise.resolve();
+// Shares one staleness-triggered sync among concurrent getState calls:
+// N tabs restored at once get one fetch round, not N queued ones.
+let stalenessSync = null;
+
+function syncBlocklists() {
+  const run = syncChain.then(syncBlocklistsNow);
+  syncChain = run.catch(() => {});
+  return run;
+}
+
+async function syncBlocklistsNow() {
   const state = await ensureDefaults();
   const base = state.apiBaseUrl?.replace(/\/$/, "") || DEFAULT_SETTINGS.apiBaseUrl;
   const lists = Array.isArray(state.subscribedLists) ? state.subscribedLists : [];
@@ -243,6 +249,8 @@ async function syncBlocklists() {
   const sourceHighlightLists = {};
   const usersByList = {};
   const effectiveType = {};
+  let fetchSuccesses = 0;
+  let fetchFailures = 0;
   const labels = { ...(state.subscribedLabels || {}) };
   const transientFlags = state.transientLists || {};
   // Fetch all subscribed lists concurrently — each iteration only touches
@@ -272,7 +280,9 @@ async function syncBlocklists() {
         labels[trimmed] = name;
       }
       if (listType === 'highlight') sourceHighlightLists[trimmed] = users; else sourceLists[trimmed] = users;
+      fetchSuccesses++;
     } catch (err) {
+      fetchFailures++;
       // On failure, retain last-known-good data for this list if available.
       const overrideType = (state.subscribedOverrides && state.subscribedOverrides[trimmed]) || null;
       const prevBlocked = (state.blocked && state.blocked.sourceLists && state.blocked.sourceLists[trimmed]) || [];
@@ -353,6 +363,14 @@ async function syncBlocklists() {
   const persistentBlockedSet = new Set(mergedBlockedPersistent);
   const transientOnly = mergedBlocked.filter((n) => !persistentBlockedSet.has(n));
 
+  // A sync where every list fetch failed produced no new data: keep the old
+  // lastSync so the next getState retries, instead of freezing the all-stale
+  // result for another AUTO_SYNC_MAX_AGE_MS. Partial failures still bump it —
+  // retrying on every page load against a single dead list would hammer the
+  // API for nothing.
+  const syncedAt = fetchFailures > 0 && fetchSuccesses === 0
+    ? ((state.blocked && state.blocked.lastSync) || null)
+    : Date.now();
   const next = {
     ...state,
     subscribedLabels: labels,
@@ -362,12 +380,12 @@ async function syncBlocklists() {
       transientOnly,
       localPatterns: localBlockedPatterns,
       sourceLists,
-      lastSync: Date.now()
+      lastSync: syncedAt
     },
     highlighted: {
       combined: Array.from(mergedHighlighted),
       sourceLists: sourceHighlightLists,
-      lastSync: Date.now()
+      lastSync: syncedAt
     }
   };
   await setState(next);
@@ -389,14 +407,15 @@ async function maybeSyncBlocklists() {
   const last = current && current.blocked && current.blocked.lastSync
     ? Number(current.blocked.lastSync)
     : 0;
-  if (!last || (Date.now() - last) > AUTO_SYNC_MAX_AGE_MS) {
-    try {
-      return await syncBlocklists();
-    } catch (_) {
-      return current;
-    }
+  if (last && (Date.now() - last) <= AUTO_SYNC_MAX_AGE_MS) return current;
+  if (!stalenessSync) {
+    stalenessSync = syncBlocklists().finally(() => { stalenessSync = null; });
   }
-  return current;
+  try {
+    return await stalenessSync;
+  } catch (_) {
+    return current;
+  }
 }
 
 // --- Signing utilities (Ed25519 via WebCrypto) ---
@@ -649,11 +668,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     switch (message.type) {
       case "overmod:getState": {
         // Opportunistically refresh from the server when the last successful
-        // sync is stale, but never block the response on the network: reply
-        // with cached state immediately and let clients pick up the refreshed
-        // data via their storage.onChanged listener. If the worker is killed
-        // mid-sync, the next getState simply retries.
-        maybeSyncBlocklists().catch(() => {});
+        // sync is stale. Comment pages ('page' scope) must not block on the
+        // network: they get cached state immediately and their
+        // storage.onChanged listener delivers any refresh. Everything else
+        // (user-page choosers, the options list editor) is a one-shot read
+        // with no listener — a stale cache there means acting on the wrong
+        // lists, so those wait out the staleness check. If the worker is
+        // killed mid-sync, the next getState simply retries.
+        const refresh = maybeSyncBlocklists().catch(() => {});
+        if (message.scope !== 'page') await refresh;
         const full = await getFullState();
         sendResponse(message.scope === 'page' ? toPageState(full) : full);
         break;
@@ -750,7 +773,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "overmod:setTransientUnblock": {
         try {
           const { enabled } = message;
-          const state = await getState();
+          // ensureDefaults rather than getState: this write may be the state
+          // a just-loaded page renders from, so fold sync-only additions in
+          // rather than persisting a state that lacks them.
+          const state = await ensureDefaults();
           const next = { ...state, transientUnblockActive: !!enabled };
           await setState(next);
           sendResponse({ ok: true, state: next });

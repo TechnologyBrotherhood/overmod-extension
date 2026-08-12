@@ -55,30 +55,47 @@ function handleGreenToggle(ctx, index, enabled) {
 
 function getHighlightSets(state, highlightedMap) {
   const ids = new Set(Object.keys(highlightedMap || {}).filter(k => highlightedMap[k] === true));
-  const users = new Set([
-    ...((state?.highlightedUsers || []).map(s => String(s).toLowerCase())),
-    ...((state?.highlighted?.combined || []).map(s => String(s).toLowerCase()))
-  ]);
+  // highlighted.combined is worker-merged and arrives pre-lowercased (same
+  // contract as blocked.combined in createMatchSet); only the user-typed
+  // highlightedUsers entries need normalizing.
+  const users = new Set(state?.highlighted?.combined || []);
+  for (const s of state?.highlightedUsers || []) users.add(String(s).toLowerCase());
   return { ids, users };
+}
+
+// The one render pipeline for a state change — both the initial load in
+// main() and storage events go through here, so a render step can't be
+// added to one path and missed by the other. Reads the current highlight
+// map from ctx.highlightedMap, which the storage listener keeps fresh.
+function applyState(ctx, index) {
+  ctx.userStyleMap = buildHighlightStyleMap(ctx.state);
+  ctx.greenShowing = !ctx.state?.hideGreenComments;
+  updateBlockedSets(ctx, index);
+  applyCurrentBlocking(ctx, index);
+  const hl = getHighlightSets(ctx.state, ctx.highlightedMap);
+  applyBothHighlights(index, hl.ids, hl.users, ctx.userStyleMap);
+  rerenderHeader(ctx, index);
 }
 
 async function handleStorageChanged(ctx, index, changes, area) {
   if (area !== 'local') return;
+  if (changes.overmodHighlighted) {
+    ctx.highlightedMap = changes.overmodHighlighted.newValue || {};
+  }
   if (changes.overmod) {
-    ctx.state = changes.overmod.newValue || ctx.state;
+    // Project the raw storage value through the same allowlist the worker
+    // applies to its getState reply, so a sync write doesn't swap the
+    // page's slim state back for the full object.
+    ctx.state = changes.overmod.newValue ? toPageState(changes.overmod.newValue) : ctx.state;
     ctx.stateApplied = true;
-    ctx.userStyleMap = buildHighlightStyleMap(ctx.state);
-    ctx.greenShowing = !ctx.state?.hideGreenComments;
-    updateBlockedSets(ctx, index);
-    applyCurrentBlocking(ctx, index);
-    rerenderHeader(ctx, index);
-    const map = changes.overmodHighlighted
-      ? changes.overmodHighlighted.newValue
-      : (await getLocalState()).highlighted;
-    const hl = getHighlightSets(ctx.state, map);
-    applyBothHighlights(index, hl.ids, hl.users, ctx.userStyleMap);
+    if (ctx.highlightedMap === undefined) {
+      ctx.highlightedMap = (await getLocalState()).highlighted;
+    }
+    applyState(ctx, index);
   } else if (changes.overmodHighlighted) {
-    const hl = getHighlightSets(ctx.state, changes.overmodHighlighted.newValue || {});
+    // Highlight-map-only change: nothing to re-derive from state, and a
+    // full applyState would reset the header toggles — just repaint.
+    const hl = getHighlightSets(ctx.state, ctx.highlightedMap);
     applyBothHighlights(index, hl.ids, hl.users, ctx.userStyleMap);
   }
 }
@@ -96,6 +113,12 @@ async function main() {
   const rows = getRows();
   if (!rows.length) return;
 
+  // A bfcache restore reruns main() while an earlier run may still be
+  // parked on its state fetch; the run counter lets that old continuation
+  // notice it was superseded and bail instead of repainting the page from
+  // its pre-navigation snapshot.
+  const run = (main._run = (main._run || 0) + 1);
+
   // Start the state fetches before indexing the DOM so they overlap; one
   // local read covers both the fallback state and the highlighted-ID map.
   const statePromise = Promise.all([getStateFromBackground('page'), getLocalState()]);
@@ -104,6 +127,7 @@ async function main() {
   const ctx = {
     state: null,
     stateApplied: false,
+    highlightedMap: undefined, // latest overmodHighlighted map, listener-maintained
     authors: distinctAuthors(index),
     greenCount: index.reduce((n, it) => n + (it.isGreen ? 1 : 0), 0),
     userStyleMap: new Map(),
@@ -122,17 +146,13 @@ async function main() {
   chrome.storage.onChanged.addListener(main._storageListener);
 
   const [bgState, local] = await statePromise;
-  if (ctx.stateApplied) return; // a fresher sync already rendered the page
+  if (run !== main._run) return; // superseded by a bfcache-restore rerun
+  if (ctx.highlightedMap === undefined) ctx.highlightedMap = local.highlighted;
+  if (ctx.stateApplied) return; // a fresher storage write already rendered the page
 
-  ctx.state = bgState || { ...local.overmod };
-  ctx.userStyleMap = buildHighlightStyleMap(ctx.state);
-  ctx.greenShowing = !ctx.state?.hideGreenComments;
-  updateBlockedSets(ctx, index);
-
-  const hl = getHighlightSets(ctx.state, local.highlighted);
-  applyCurrentBlocking(ctx, index);
-  applyBothHighlights(index, hl.ids, hl.users, ctx.userStyleMap);
-  rerenderHeader(ctx, index);
+  // bgState is already the slim projection; slim the local fallback too.
+  ctx.state = bgState || toPageState(local.overmod);
+  applyState(ctx, index);
 }
 
 if (document.readyState === 'loading') {

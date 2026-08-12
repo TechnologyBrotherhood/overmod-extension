@@ -194,4 +194,43 @@ console.log('Testing applyBothHighlights...');
   assert.strictEqual(index[0].row.cssVars['--overmod-highlight-bg'], common.DEFAULT_HIGHLIGHT_STYLE.bg);
 }
 
+console.log('Testing toPageState...');
+{
+  const full = {
+    apiBaseUrl: 'https://api.example',
+    writableLists: [{ publicKey: 'pk', privateKey: 'secret' }],
+    localBlockedUsers: ['x'],
+    subscribedLists: ['pk'],
+    highlightColors: { pk: '#112233' },
+    highlightedUsers: ['Alice'],
+    hideGreenComments: true,
+    blocked: {
+      combined: ['a'], combinedWithoutTransient: ['a'], transientOnly: [],
+      localPatterns: ['p.*'], sourceLists: { pk: ['a'] }, lastSync: 5
+    },
+    highlighted: { combined: ['h'], sourceLists: { pk: ['h'] }, lastSync: 5 }
+  };
+  const slim = common.toPageState(full);
+  // Additive allowlist: fields not needed to render a comment page — and
+  // everything sensitive — must be absent, not emptied.
+  assert.strictEqual(slim.writableLists, undefined);
+  assert.strictEqual(slim.localBlockedUsers, undefined);
+  assert.strictEqual(slim.apiBaseUrl, undefined);
+  assert.strictEqual(slim.blocked.sourceLists, undefined);
+  assert.deepStrictEqual(slim.blocked.combined, ['a']);
+  assert.deepStrictEqual(slim.blocked.localPatterns, ['p.*']);
+  assert.deepStrictEqual(slim.highlighted.sourceLists, { pk: ['h'] });
+  assert.deepStrictEqual(slim.highlightedUsers, ['Alice']);
+  assert.strictEqual(slim.hideGreenComments, true);
+
+  // Legacy states without combinedWithoutTransient must keep it undefined
+  // so the `|| combined` fallback in updateBlockedSets still engages.
+  const legacy = common.toPageState({ blocked: { combined: ['a'] } });
+  assert.strictEqual(legacy.blocked.combinedWithoutTransient, undefined);
+  assert.deepStrictEqual(legacy.blocked.combined, ['a']);
+
+  // Tolerates an empty/absent state (worker-unreachable local fallback)
+  assert.deepStrictEqual(common.toPageState({}).blocked.combined, []);
+}
+
 console.log('\nAll content.js tests passed.');

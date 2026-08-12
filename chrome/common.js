@@ -28,6 +28,37 @@ function normalizeHighlightStyle(value) {
   return { bg: '', fg: '' };
 }
 
+// Slim projection of the extension state for comment pages: exactly the
+// fields the content script renders from, so anything else — and anything
+// sensitive: writable-list private keys, per-list blocked copies,
+// localBlockedUsers, API config — stays out of page context unless listed
+// here. Applied by the worker's getState reply and by the content script's
+// storage.onChanged path, so both routes stay slim. combinedWithoutTransient
+// passes through undefined when absent: legacy states rely on the
+// `|| combined` fallback in updateBlockedSets, which a default [] would
+// defeat. highlighted.sourceLists stays — per-list highlight styles are
+// resolved from it.
+function toPageState(full) {
+  const blocked = (full && full.blocked) || {};
+  const highlighted = (full && full.highlighted) || {};
+  return {
+    hideGreenComments: !!(full && full.hideGreenComments),
+    subscribedLists: (full && full.subscribedLists) || [],
+    highlightColors: (full && full.highlightColors) || {},
+    highlightedUsers: (full && full.highlightedUsers) || [],
+    blocked: {
+      combined: blocked.combined || [],
+      combinedWithoutTransient: blocked.combinedWithoutTransient,
+      transientOnly: blocked.transientOnly || [],
+      localPatterns: blocked.localPatterns || []
+    },
+    highlighted: {
+      combined: highlighted.combined || [],
+      sourceLists: highlighted.sourceLists || {}
+    }
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { DEFAULT_HIGHLIGHT_STYLE, normalizeHexColor, normalizeHighlightStyle };
+  module.exports = { DEFAULT_HIGHLIGHT_STYLE, normalizeHexColor, normalizeHighlightStyle, toPageState };
 }
