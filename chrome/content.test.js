@@ -233,4 +233,21 @@ console.log('Testing toPageState...');
   assert.deepStrictEqual(common.toPageState({}).blocked.combined, []);
 }
 
+console.log('Testing toPublicWritableLists...');
+{
+  const pub = common.toPublicWritableLists([
+    { publicKey: 'pk1', privateKey: 'sk1', label: 'L', type: 'block', baseUrl: 'https://api.example' },
+    { publicKey: 'pk2', privateKey: 'sk2' }
+  ]);
+  // Chooser UIs keep list identity/name/kind/host; signing keys never
+  // appear in a message reply.
+  assert.deepStrictEqual(pub.map(l => l.publicKey), ['pk1', 'pk2']);
+  assert.strictEqual(pub[0].label, 'L');
+  assert.strictEqual(pub[0].type, 'block');
+  assert.strictEqual(pub[0].baseUrl, 'https://api.example');
+  assert.ok(pub.every(l => !('privateKey' in l)));
+
+  assert.deepStrictEqual(common.toPublicWritableLists(undefined), []);
+}
+
 console.log('\nAll content.js tests passed.');

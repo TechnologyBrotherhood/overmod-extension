@@ -361,10 +361,11 @@ function applyBothHighlights(index, highlightedIds, highlightedUsers, userStyleM
 }
 
 // scope 'page' asks the background for the slim comment-page state (no
-// per-list blocked copies, no writable-list credentials), served from cache
-// without waiting on a refresh. Omit it for the full state the user-page
-// choosers need — the worker then waits out its staleness check first, so
-// these one-shot reads act on current lists.
+// per-list blocked copies, no writable lists), served from cache without
+// waiting on a refresh. Omit it for the full state the user-page choosers
+// need — the worker then waits out its staleness check first, so these
+// one-shot reads act on current lists. Either way the reply's writableLists
+// carry only public fields; the signing keys never leave the worker.
 async function getStateFromBackground(scope) {
   try {
     return await chrome.runtime.sendMessage({ type: 'overmod:getState', scope });

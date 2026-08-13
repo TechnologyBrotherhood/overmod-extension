@@ -59,6 +59,19 @@ function toPageState(full) {
   };
 }
 
+// Public view of writableLists for message replies: what a chooser UI needs
+// to offer a list (identity, name, kind, API host) and nothing more. The
+// private signing keys never leave the service worker — it re-reads them
+// from its own storage when asked to sign — so no reply should carry them.
+function toPublicWritableLists(lists) {
+  return (Array.isArray(lists) ? lists : []).map((l) => ({
+    publicKey: (l && l.publicKey) || '',
+    label: l && l.label,
+    type: l && l.type,
+    baseUrl: l && l.baseUrl
+  }));
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { DEFAULT_HIGHLIGHT_STYLE, normalizeHexColor, normalizeHighlightStyle, toPageState };
+  module.exports = { DEFAULT_HIGHLIGHT_STYLE, normalizeHexColor, normalizeHighlightStyle, toPageState, toPublicWritableLists };
 }

@@ -261,9 +261,13 @@ async function syncBlocklistsNow() {
     if (!trimmed) return;
     try {
       const data = await withRetry(async () => {
+        // Timeout so a stalled connection can't hang this sync — syncs are
+        // serialized through syncChain, so one hung fetch would otherwise
+        // block every future sync until the worker is reaped.
         const res = await fetch(`${base}/lists/${encodeURIComponent(trimmed)}`, {
           method: "GET",
-          headers: { "Accept": "application/json" }
+          headers: { "Accept": "application/json" },
+          signal: AbortSignal.timeout(15000)
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -662,6 +666,13 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
 });
 
+// Every message reply that carries state goes through here so private keys
+// stay confined to the worker: chooser UIs get each writable list's public
+// fields and signing re-reads the keys from worker storage.
+function toPublicState(state) {
+  return { ...state, writableLists: toPublicWritableLists(state.writableLists) };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     if (!message || typeof message !== "object") return;
@@ -678,13 +689,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const refresh = maybeSyncBlocklists().catch(() => {});
         if (message.scope !== 'page') await refresh;
         const full = await getFullState();
-        sendResponse(message.scope === 'page' ? toPageState(full) : full);
+        sendResponse(message.scope === 'page' ? toPageState(full) : toPublicState(full));
         break;
       }
       case "overmod:syncNow": {
         try {
           const next = await syncBlocklists();
-          sendResponse({ ok: true, state: next });
+          sendResponse({ ok: true, state: toPublicState(next) });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });
         }
@@ -735,7 +746,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         try {
           const { publicKey, listType, name } = message;
           const next = await subscribeList(publicKey, listType, name);
-          sendResponse({ ok: true, state: next });
+          sendResponse({ ok: true, state: toPublicState(next) });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });
         }
@@ -745,7 +756,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         try {
           const { publicKey } = message;
           const next = await unsubscribeList(publicKey);
-          sendResponse({ ok: true, state: next });
+          sendResponse({ ok: true, state: toPublicState(next) });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });
         }
@@ -779,7 +790,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           const state = await ensureDefaults();
           const next = { ...state, transientUnblockActive: !!enabled };
           await setState(next);
-          sendResponse({ ok: true, state: next });
+          sendResponse({ ok: true, state: toPublicState(next) });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });
         }

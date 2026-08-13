@@ -153,6 +153,21 @@ async function main() {
   // bgState is already the slim projection; slim the local fallback too.
   ctx.state = bgState || toPageState(local.overmod);
   applyState(ctx, index);
+
+  // The storage listener's registration races the worker's opportunistic
+  // sync: onChanged events are dispatched only to contexts whose listener
+  // the browser process already knows about, so a sync write landing before
+  // our registration propagates is dropped, not queued (seen in the browser
+  // harness as a reload stuck on stale state). One re-read closes the race:
+  // it is ordered after the registration, so any sync write it doesn't see
+  // will arrive as a normal event.
+  const recheck = await getLocalState();
+  if (run !== main._run || ctx.stateApplied) return;
+  if ((recheck.overmod?.blocked?.lastSync || 0) !== (ctx.state?.blocked?.lastSync || 0)) {
+    ctx.state = toPageState(recheck.overmod);
+    ctx.highlightedMap = recheck.highlighted;
+    applyState(ctx, index);
+  }
 }
 
 if (document.readyState === 'loading') {
