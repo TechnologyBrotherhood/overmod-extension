@@ -250,4 +250,57 @@ console.log('Testing toPublicWritableLists...');
   assert.deepStrictEqual(common.toPublicWritableLists(undefined), []);
 }
 
+console.log('Testing confirmed list writes update cached blocking immediately...');
+{
+  const initial = {
+    subscribedLists: ['early', 'mine', 'transient'],
+    subscribedOverrides: { early: 'highlight', mine: 'block', transient: 'block' },
+    transientLists: { transient: true },
+    localBlockedUsers: ['local', 'bot.*'],
+    highlightedUsers: [],
+    blocked: {
+      combined: ['old', 'temporary'],
+      combinedWithoutTransient: ['old'],
+      transientOnly: ['temporary'],
+      sourceLists: { mine: ['old'], transient: ['temporary'] },
+      lastSync: 123
+    },
+    highlighted: {
+      combined: ['alice'],
+      sourceLists: { early: ['alice'] },
+      lastSync: 123
+    }
+  };
+
+  const added = common.applyListUserMutation(initial, {
+    action: 'add', publicKey: 'mine', username: 'Alice', listType: 'block'
+  });
+  // The earlier highlight list still wins, while an ordinary new block is
+  // reflected in both the cached source list and merged page state.
+  assert.deepStrictEqual(added.blocked.sourceLists.mine, ['old', 'Alice']);
+  assert.ok(!added.blocked.combined.includes('alice'));
+  const blocked = common.applyListUserMutation(added, {
+    action: 'add', publicKey: 'mine', username: 'Bob', listType: 'block'
+  });
+  assert.ok(blocked.blocked.combined.includes('bob'));
+  assert.ok(blocked.blocked.combinedWithoutTransient.includes('bob'));
+  assert.deepStrictEqual(blocked.blocked.transientOnly, ['temporary']);
+  assert.deepStrictEqual(blocked.blocked.localPatterns, ['bot.*']);
+  assert.strictEqual(blocked.blocked.lastSync, 123);
+
+  const removed = common.applyListUserMutation(blocked, {
+    action: 'remove', publicKey: 'mine', username: 'BOB', listType: 'block'
+  });
+  assert.ok(!removed.blocked.combined.includes('bob'));
+  assert.ok(!removed.blocked.sourceLists.mine.some(name => name.toLowerCase() === 'bob'));
+
+  // A writable list that was not subscribed becomes effective locally too.
+  const newList = common.applyListUserMutation(removed, {
+    action: 'add', publicKey: 'new-list', username: 'Carol', listType: 'block'
+  });
+  assert.ok(newList.subscribedLists.includes('new-list'));
+  assert.strictEqual(newList.subscribedOverrides['new-list'], 'block');
+  assert.ok(newList.blocked.combined.includes('carol'));
+}
+
 console.log('\nAll content.js tests passed.');

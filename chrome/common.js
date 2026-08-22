@@ -72,6 +72,105 @@ function toPublicWritableLists(lists) {
   }));
 }
 
+// Apply a confirmed remote-list write to the cached list data and rebuild the
+// derived sets consumed by comment pages. This makes writes visible locally
+// without waiting for a follow-up GET of the whole list.
+function applyListUserMutation(full, mutation) {
+  const state = full || {};
+  const publicKey = String(mutation && mutation.publicKey || '').trim();
+  const username = String(mutation && mutation.username || '').trim();
+  if (!publicKey || !username) return state;
+
+  const usernameLower = username.toLowerCase();
+  const listType = String(mutation.listType || 'block').toLowerCase() === 'highlight'
+    ? 'highlight'
+    : 'block';
+  const remove = mutation.action === 'remove';
+  const subscribedLists = Array.isArray(state.subscribedLists)
+    ? state.subscribedLists.slice()
+    : [];
+  if (!subscribedLists.includes(publicKey)) subscribedLists.push(publicKey);
+
+  const subscribedOverrides = { ...(state.subscribedOverrides || {}), [publicKey]: listType };
+  const blockedSources = { ...((state.blocked && state.blocked.sourceLists) || {}) };
+  const highlightedSources = { ...((state.highlighted && state.highlighted.sourceLists) || {}) };
+  const targetSources = listType === 'highlight' ? highlightedSources : blockedSources;
+  const otherSources = listType === 'highlight' ? blockedSources : highlightedSources;
+
+  let targetUsers = Array.isArray(targetSources[publicKey])
+    ? targetSources[publicKey].slice()
+    : [];
+  if (remove) {
+    targetUsers = targetUsers.filter((name) => String(name).toLowerCase() !== usernameLower);
+  } else if (!targetUsers.some((name) => String(name).toLowerCase() === usernameLower)) {
+    targetUsers.push(username);
+  }
+  targetSources[publicKey] = targetUsers;
+  // A list has one effective type. Avoid retaining an obsolete copy if its
+  // type was changed before this write.
+  delete otherSources[publicKey];
+
+  const decision = new Map();
+  const decisionPersistent = new Map();
+  const addDecision = (name, type, persistent) => {
+    const key = String(name || '').trim().toLowerCase();
+    if (!key) return;
+    if (!decision.has(key)) decision.set(key, type);
+    if (persistent && !decisionPersistent.has(key)) decisionPersistent.set(key, type);
+  };
+
+  for (const name of state.highlightedUsers || []) addDecision(name, 'highlight', true);
+  const localPatterns = [];
+  for (const name of state.localBlockedUsers || []) {
+    const value = String(name || '').trim();
+    if (!value) continue;
+    if (/[.*+?^${}()|[\]\\]/.test(value)) localPatterns.push(value);
+    else addDecision(value, 'block', true);
+  }
+
+  const transientLists = state.transientLists || {};
+  for (const pk of subscribedLists) {
+    const type = subscribedOverrides[pk]
+      || (Object.prototype.hasOwnProperty.call(highlightedSources, pk) ? 'highlight' : 'block');
+    const users = type === 'highlight' ? (highlightedSources[pk] || []) : (blockedSources[pk] || []);
+    const persistent = !(type === 'block' && transientLists[pk]);
+    for (const name of users) addDecision(name, type, persistent);
+  }
+
+  const combined = [];
+  const combinedWithoutTransient = [];
+  const highlightedCombined = [];
+  for (const [name, type] of decision) {
+    (type === 'highlight' ? highlightedCombined : combined).push(name);
+  }
+  for (const [name, type] of decisionPersistent) {
+    if (type === 'block') combinedWithoutTransient.push(name);
+  }
+  combined.sort();
+  combinedWithoutTransient.sort();
+  highlightedCombined.sort();
+  const persistentSet = new Set(combinedWithoutTransient);
+
+  return {
+    ...state,
+    subscribedLists,
+    subscribedOverrides,
+    blocked: {
+      ...(state.blocked || {}),
+      combined,
+      combinedWithoutTransient,
+      transientOnly: combined.filter((name) => !persistentSet.has(name)),
+      localPatterns,
+      sourceLists: blockedSources
+    },
+    highlighted: {
+      ...(state.highlighted || {}),
+      combined: highlightedCombined,
+      sourceLists: highlightedSources
+    }
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { DEFAULT_HIGHLIGHT_STYLE, normalizeHexColor, normalizeHighlightStyle, toPageState, toPublicWritableLists };
+  module.exports = { DEFAULT_HIGHLIGHT_STYLE, normalizeHexColor, normalizeHighlightStyle, toPageState, toPublicWritableLists, applyListUserMutation };
 }

@@ -240,6 +240,33 @@ function syncBlocklists() {
   return run;
 }
 
+// Serialize confirmed list writes with list refreshes. The remote mutation is
+// already durable at this point, so update the cached source list directly;
+// a second network round trip is not needed to make the change effective.
+function applyConfirmedListMutation(mutation, target) {
+  const run = syncChain.then(async () => {
+    const state = await ensureDefaults();
+    const listType = String((target && target.type) || 'block').toLowerCase() === 'highlight'
+      ? 'highlight'
+      : 'block';
+    const next = applyListUserMutation(state, { ...mutation, listType });
+    const sync = await getSyncSettings();
+    const subscribedLists = Array.isArray(sync.subscribedLists) ? sync.subscribedLists.slice() : [];
+    if (!subscribedLists.includes(mutation.publicKey)) subscribedLists.push(mutation.publicKey);
+    const subscribedOverrides = {
+      ...(sync.subscribedOverrides || {}),
+      [mutation.publicKey]: listType
+    };
+    await Promise.all([
+      setState(next),
+      setSyncSettings({ ...sync, subscribedLists, subscribedOverrides })
+    ]);
+    return next;
+  });
+  syncChain = run.catch(() => {});
+  return run;
+}
+
 async function syncBlocklistsNow() {
   const state = await ensureDefaults();
   const base = state.apiBaseUrl?.replace(/\/$/, "") || DEFAULT_SETTINGS.apiBaseUrl;
@@ -266,6 +293,7 @@ async function syncBlocklistsNow() {
         // block every future sync until the worker is reaped.
         const res = await fetch(`${base}/lists/${encodeURIComponent(trimmed)}`, {
           method: "GET",
+          cache: "no-store",
           headers: { "Accept": "application/json" },
           signal: AbortSignal.timeout(15000)
         });
@@ -717,7 +745,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             break;
           }
           const result = await addUserToList(username, target, target.baseUrl || full.apiBaseUrl);
-          await syncBlocklists();
+          await applyConfirmedListMutation({
+            action: 'add',
+            username,
+            publicKey: String(target.publicKey || '').trim()
+          }, target);
           sendResponse({ ok: true, result });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });
@@ -735,7 +767,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             break;
           }
           const result = await removeUserFromList(username, target, target.baseUrl || full.apiBaseUrl);
-          await syncBlocklists();
+          await applyConfirmedListMutation({
+            action: 'remove',
+            username,
+            publicKey: String(target.publicKey || '').trim()
+          }, target);
           sendResponse({ ok: true, result });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });
