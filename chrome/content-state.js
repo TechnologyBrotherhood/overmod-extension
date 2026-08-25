@@ -1,6 +1,13 @@
-// Page state management and entry point for the Overmod content script.
-// Operates on a ctx object that holds mutable page-level state,
-// and an index array of comment rows built by content.js.
+// Runs at document_start, before any body DOM exists: register the hiding
+// CSS and start the page-scope state fetch immediately so both overlap the
+// full HTML parse. Without this the script ran at document_idle — after the
+// page had fully painted — so blocked comments were visible for one or more
+// frames before hiding landed (the reported flash).
+injectStyle();
+let eagerState = null;
+if (!isUserPage()) {
+  eagerState = Promise.all([getStateFromBackground('page'), getLocalState()]);
+}
 
 function updateBlockedSets(ctx, index) {
   const st = ctx.state;
@@ -119,9 +126,12 @@ async function main() {
   // its pre-navigation snapshot.
   const run = (main._run = (main._run || 0) + 1);
 
-  // Start the state fetches before indexing the DOM so they overlap; one
-  // local read covers both the fallback state and the highlighted-ID map.
-  const statePromise = Promise.all([getStateFromBackground('page'), getLocalState()]);
+  // First-run loads consume the eager fetch started at document_start (its
+  // latency is hidden behind the HTML parse); bfcache reruns and any later
+  // entry refetch, since the cached state may have moved on.
+  const eager = eagerState;
+  eagerState = null;
+  const statePromise = eager || Promise.all([getStateFromBackground('page'), getLocalState()]);
   const index = buildIndex(rows);
 
   const ctx = {

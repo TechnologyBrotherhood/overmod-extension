@@ -24,7 +24,16 @@ function injectStyle() {
   const s = document.createElement("style");
   s.id = "overmod-style";
   s.textContent = STYLE;
-  document.documentElement.appendChild(s);
+  // document_start runs before <html> is parsed, so documentElement (and
+  // head/body) can be null here. Park the append until the shell exists; the
+  // DOMContentLoaded dispatch for it runs before main()'s, so the rule is
+  // live before any hiding class is applied.
+  const attach = () => {
+    const host = document.documentElement || document.head || document.body;
+    if (host && !host.contains(s)) host.appendChild(s);
+  };
+  if (document.documentElement) attach();
+  else document.addEventListener('DOMContentLoaded', attach, { once: true });
 }
 
 function $all(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
