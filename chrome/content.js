@@ -5,37 +5,6 @@
 // Basic diagnostics to help verify the script is active
 try { console.log('Overmod Active'); } catch (_) {}
 
-// CSS injected for hidden/highlighted threads and actions
-function injectStyle() {
-  const STYLE = `
-    .overmod-hidden { display: none !important; }
-    .overmod-highlight > td { background: var(--overmod-highlight-bg, ${DEFAULT_HIGHLIGHT_STYLE.bg}) !important; color: var(--overmod-highlight-fg, ${DEFAULT_HIGHLIGHT_STYLE.fg}) !important; }
-    .overmod-highlight a, .overmod-highlight a:visited, .overmod-highlight .hnuser, .overmod-highlight .commtext { color: var(--overmod-highlight-fg, ${DEFAULT_HIGHLIGHT_STYLE.fg}) !important; }
-    .overmod-inline-action { color: #828282; margin-left: 6px; font-size: 12px; }
-    .overmod-inline-action a { color: #828282; text-decoration: none; }
-    .overmod-inline-action a:hover { text-decoration: underline; }
-    #overmod-header { font-size: inherit; color: #828282; }
-    #overmod-header a { color: inherit; text-decoration: none; }
-    #overmod-header a:hover { text-decoration: underline; }
-    #overmod-removed-banner td { padding: 4px 10px; color: #828282; font-size: 10pt; }
-  `;
-
-  if (document.getElementById("overmod-style")) return;
-  const s = document.createElement("style");
-  s.id = "overmod-style";
-  s.textContent = STYLE;
-  // document_start runs before <html> is parsed, so documentElement (and
-  // head/body) can be null here. Park the append until the shell exists; the
-  // DOMContentLoaded dispatch for it runs before main()'s, so the rule is
-  // live before any hiding class is applied.
-  const attach = () => {
-    const host = document.documentElement || document.head || document.body;
-    if (host && !host.contains(s)) host.appendChild(s);
-  };
-  if (document.documentElement) attach();
-  else document.addEventListener('DOMContentLoaded', attach, { once: true });
-}
-
 function $all(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
 
 function compilePatterns(patterns) {

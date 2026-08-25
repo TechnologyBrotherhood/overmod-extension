@@ -1,13 +1,14 @@
-// Runs at document_start, before any body DOM exists: register the hiding
-// CSS and start the page-scope state fetch immediately so both overlap the
-// full HTML parse. Without this the script ran at document_idle — after the
-// page had fully painted — so blocked comments were visible for one or more
-// frames before hiding landed (the reported flash).
-injectStyle();
-let eagerState = null;
-if (!isUserPage()) {
-  eagerState = Promise.all([getStateFromBackground('page'), getLocalState()]);
-}
+// Runs at document_start, before any body DOM exists: wake the service worker
+// so its page-scope reply (and the opportunistic blocklist refresh it
+// triggers) is in flight while the page parses. The first apply does NOT wait
+// on this round trip — on cached reloads the page parses faster than the
+// worker IPC, so waiting let blocked comments paint before hiding (the flash
+// you can provoke by holding Cmd-R). Instead main() applies from the
+// last-known local state immediately, and fresher synced state arrives via
+// the storage.onChanged listener. The hiding CSS lives in content.css
+// (manifest document_start stylesheet) and gates every comment row behind
+// html[data-overmod-ready], so nothing blocked can paint before applyState.
+if (!isUserPage()) void getStateFromBackground('page');
 
 function updateBlockedSets(ctx, index) {
   const st = ctx.state;
@@ -82,6 +83,9 @@ function applyState(ctx, index) {
   const hl = getHighlightSets(ctx.state, ctx.highlightedMap);
   applyBothHighlights(index, hl.ids, hl.users, ctx.userStyleMap);
   rerenderHeader(ctx, index);
+  // Lift the pre-paint gate: rows are now rendered per .overmod-hidden, so a
+  // blocked comment can never have been visible in the first paint.
+  document.documentElement?.setAttribute('data-overmod-ready', '1');
 }
 
 async function handleStorageChanged(ctx, index, changes, area) {
@@ -110,7 +114,6 @@ async function handleStorageChanged(ctx, index, changes, area) {
 // -- Entry point --
 
 async function main() {
-  injectStyle();
   if (isUserPage()) {
     const u = getUserPageUsername();
     try { console.log(`User ${u} detected`); } catch (_) {}
@@ -124,14 +127,9 @@ async function main() {
   // parked on its state fetch; the run counter lets that old continuation
   // notice it was superseded and bail instead of repainting the page from
   // its pre-navigation snapshot.
+
   const run = (main._run = (main._run || 0) + 1);
 
-  // First-run loads consume the eager fetch started at document_start (its
-  // latency is hidden behind the HTML parse); bfcache reruns and any later
-  // entry refetch, since the cached state may have moved on.
-  const eager = eagerState;
-  eagerState = null;
-  const statePromise = eager || Promise.all([getStateFromBackground('page'), getLocalState()]);
   const index = buildIndex(rows);
 
   const ctx = {
@@ -155,13 +153,16 @@ async function main() {
   main._storageListener = (changes, area) => handleStorageChanged(ctx, index, changes, area);
   chrome.storage.onChanged.addListener(main._storageListener);
 
-  const [bgState, local] = await statePromise;
+  // Apply from the last-known local state right away, without waiting on the
+  // worker round trip. The worker's page-scope reply and the opportunistic
+  // sync it triggers arrive via storage.onChanged / the recheck below, so a
+  // fresher synced state just re-runs the same pipeline.
+  const local = await getLocalState();
   if (run !== main._run) return; // superseded by a bfcache-restore rerun
   if (ctx.highlightedMap === undefined) ctx.highlightedMap = local.highlighted;
   if (ctx.stateApplied) return; // a fresher storage write already rendered the page
 
-  // bgState is already the slim projection; slim the local fallback too.
-  ctx.state = bgState || toPageState(local.overmod);
+  ctx.state = toPageState(local.overmod);
   applyState(ctx, index);
 
   // The storage listener's registration races the worker's opportunistic

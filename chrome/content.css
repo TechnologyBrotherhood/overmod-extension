@@ -1,0 +1,51 @@
+/* Overmod — injected as a document_start content-script stylesheet (see
+   manifest.json), so these rules exist before the page parses. The pre-paint
+   gate is what guarantees a blocked comment can never be visible in the first
+   paint: every comment row stays hidden until applyState has built its sets,
+   then the content script sets data-overmod-ready on <html> and rows render
+   per .overmod-hidden. */
+html:not([data-overmod-ready]) tr.athing.comtr {
+  display: none !important;
+}
+
+.overmod-hidden {
+  display: none !important;
+}
+.overmod-highlight > td {
+  background: var(--overmod-highlight-bg, #fff8d1) !important;
+  color: var(--overmod-highlight-fg, #2d2d2d) !important;
+}
+.overmod-highlight a,
+.overmod-highlight a:visited,
+.overmod-highlight .hnuser,
+.overmod-highlight .commtext {
+  color: var(--overmod-highlight-fg, #2d2d2d) !important;
+}
+.overmod-inline-action {
+  color: #828282;
+  margin-left: 6px;
+  font-size: 12px;
+}
+.overmod-inline-action a {
+  color: #828282;
+  text-decoration: none;
+}
+.overmod-inline-action a:hover {
+  text-decoration: underline;
+}
+#overmod-header {
+  font-size: inherit;
+  color: #828282;
+}
+#overmod-header a {
+  color: inherit;
+  text-decoration: none;
+}
+#overmod-header a:hover {
+  text-decoration: underline;
+}
+#overmod-removed-banner td {
+  padding: 4px 10px;
+  color: #828282;
+  font-size: 10pt;
+}
