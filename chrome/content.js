@@ -53,6 +53,16 @@ function createOptionsLink(anchorEl) {
   anchorEl.replaceWith(msg);
 }
 
+// The background couldn't be reached — typically this tab's content script
+// outlived an extension reload/update, which orphans it from the new worker.
+// Say so rather than reporting "no writable lists", which would be false.
+function createReloadNotice(anchorEl) {
+  const msg = document.createElement('span');
+  msg.className = 'overmod-inline-action';
+  msg.textContent = 'Overmod was updated — reload this page';
+  anchorEl.replaceWith(msg);
+}
+
 function populateListSelect(select, lists) {
   for (const l of lists) {
     const opt = document.createElement('option');
@@ -416,7 +426,11 @@ function insertOvermodRow(username) {
 
   async function showChooser(kind, anchorEl) {
     const s = await getStateFromBackground();
-    const listsAll = Array.isArray(s?.writableLists) ? s.writableLists : [];
+    if (!s) {
+      createReloadNotice(anchorEl);
+      return;
+    }
+    const listsAll = Array.isArray(s.writableLists) ? s.writableLists : [];
     if (!listsAll.length) {
       createOptionsLink(anchorEl);
       return;
@@ -452,7 +466,11 @@ function insertOvermodRow(username) {
 
   async function showUnblockChooser(anchorEl) {
     const s = await getStateFromBackground();
-    const listsAll = Array.isArray(s?.writableLists) ? s.writableLists : [];
+    if (!s) {
+      createReloadNotice(anchorEl);
+      return;
+    }
+    const listsAll = Array.isArray(s.writableLists) ? s.writableLists : [];
     const blockedSource = (s?.blocked && s.blocked.sourceLists) || {};
     if (!listsAll.length) {
       createOptionsLink(anchorEl);
