@@ -126,7 +126,7 @@ function getCommentId(row) {
 
 function isGreenComment(hnuser) {
   if (!hnuser) return false;
-  // HN wraps new-account usernames in <font color="#3c963c"> inside .hnuser
+  // HN wraps new-account usernames in <font color="#3c963c"> inside the author link
   const font = hnuser.querySelector('font[color]');
   if (!font) return false;
   const hex = (font.getAttribute('color') || '').replace('#', '');
@@ -139,7 +139,8 @@ function isGreenComment(hnuser) {
 
 function buildIndex(rows) {
   return rows.map((row) => {
-    const hnuser = row.querySelector('.hnuser');
+    // HN dropped class="hnuser" (Nov 2026); fall back to the comhead user link.
+    const hnuser = row.querySelector('.hnuser') || row.querySelector('.comhead a[href^="user?id="]');
     const author = hnuser ? String(hnuser.textContent || '').trim() : '';
     return {
       row,
